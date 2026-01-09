@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Mirror;
 using UnityEngine;
@@ -21,8 +21,11 @@ namespace RunFast2.Scripts.Network
 
         // ================== 2. 游戏数据 (Gameplay Data) ==================
 
-        // 本地存储玩家的手牌 (不需要 SyncVar，因为只有自己和服务器需要知道)
+        // 客户端本地手牌
         public List<Card> MyHand = new List<Card>();
+
+        // 服务器端手牌验证 (Authoritative)
+        public readonly List<Card> ServerHand = new List<Card>();
 
         // ================== 3. 事件定义 (Events) ==================
     
@@ -30,15 +33,19 @@ namespace RunFast2.Scripts.Network
         public static event Action<CardPlayer> OnPlayerInfoUpdated;
         public static event Action<CardPlayer> OnPlayerLeft;
     
-        // 收到手牌事件 (UI监听这个来显示牌)
+        // 收到手牌事件
         public event Action OnHandReceived; 
+
+        // 游戏事件 (RPC收到时触发)
+        public static event Action<int, Card[]> OnOpponentPlayed; // 座位号, 牌
+        public static event Action<int> OnOpponentPassed;
+        public static event Action<int> OnGameWin;
 
         // ================== 4. 生命周期 (Lifecycle) ==================
 
         public override void OnStartClient()
         {
             base.OnStartClient();
-            // 客户端启动时，刷新一次 UI
             OnPlayerInfoUpdated?.Invoke(this);
         }
 
@@ -53,7 +60,6 @@ namespace RunFast2.Scripts.Network
         [Command]
         public void CmdSitDown(int seatID, string name)
         {
-            // 防抢座逻辑
             foreach (var p in FindObjectsOfType<CardPlayer>())
             {
                 if (p.SeatIndex == seatID) return; 
@@ -61,18 +67,11 @@ namespace RunFast2.Scripts.Network
 
             this.SeatIndex = seatID;
     
-            // 2. 这里不再使用 "Player {netId}"，而是使用传进来的 name
-            // 为了防止名字为空，加个保底
             if (string.IsNullOrEmpty(name))
-            {
                 this.PlayerName = $"Player {netId}";
-            }
             else
-            {
                 this.PlayerName = name; 
-            }
 
-            // 坐下时重置准备状态
             this.IsReady = false; 
         }
 
@@ -81,9 +80,25 @@ namespace RunFast2.Scripts.Network
         {
             if (SeatIndex == -1) return;
             this.IsReady = !this.IsReady;
-        
-            // 检查是否所有人都准备好了
             CheckAllReady();
+        }
+
+        [Command]
+        public void CmdPlayCard(Card[] cards)
+        {
+            if (PokerManager.Instance != null)
+            {
+                PokerManager.Instance.OnPlayerPlayCard(this, cards);
+            }
+        }
+
+        [Command]
+        public void CmdPass()
+        {
+            if (PokerManager.Instance != null)
+            {
+                PokerManager.Instance.OnPlayerPass(this);
+            }
         }
 
         // ================== 6. 服务器逻辑 (Server Logic) ==================
@@ -104,8 +119,6 @@ namespace RunFast2.Scripts.Network
                 }
             }
 
-            // 假设是3人局，且必须满3人才开始
-            // 这里的数字3可以提取为常量或配置
             if (seatedCount == 3 && readyCount == 3)
             {
                 Debug.Log("所有玩家准备完毕，请求 PokerManager 发牌...");
@@ -120,24 +133,45 @@ namespace RunFast2.Scripts.Network
             }
         }
 
-        // ================== 7. 服务器 -> 客户端 RPC (TargetRPC) ==================
+        // ================== 7. 服务器 -> 客户端 RPC (TargetRPC & Rpc) ==================
 
-        /// <summary>
-        /// 接收手牌：这是之前报错缺失的方法
-        /// </summary>
         [TargetRpc]
         public void TargetRpcReceiveHand(NetworkConnection target, Card[] newCards)
         {
             MyHand.Clear();
             MyHand.AddRange(newCards);
-        
-            // 客户端理牌
             SortHand();
-
             Debug.Log($"我是玩家 {netId} (座位 {SeatIndex}), 收到了 {MyHand.Count} 张牌。");
-        
-            // 通知 UI (HandView) 显示这些牌
             OnHandReceived?.Invoke();
+        }
+
+        [ClientRpc]
+        public void RpcOnPlayerPlayed(int seatIndex, Card[] cards, int handType)
+        {
+            // 如果是自己出的牌，因为本地预测/UI更新可能已经移除，这里确认同步
+            // 如果是别人出的牌，UI显示动画
+            Debug.Log($"玩家 {seatIndex} 出牌: {cards.Length} 张");
+            OnOpponentPlayed?.Invoke(seatIndex, cards);
+
+            // 如果是自己，需要确认本地手牌被扣除 (如果本地尚未扣除)
+            if (SeatIndex == seatIndex && isLocalPlayer)
+            {
+                RemoveCardsFromLocalHand(cards);
+            }
+        }
+
+        [ClientRpc]
+        public void RpcOnPlayerPassed(int seatIndex)
+        {
+            Debug.Log($"玩家 {seatIndex} 不要");
+            OnOpponentPassed?.Invoke(seatIndex);
+        }
+
+        [ClientRpc]
+        public void RpcGameFinished(int winnerSeat)
+        {
+            Debug.Log($"游戏结束，赢家: {winnerSeat}");
+            OnGameWin?.Invoke(winnerSeat);
         }
 
         // ================== 8. 辅助方法 & Hooks ==================
@@ -151,6 +185,23 @@ namespace RunFast2.Scripts.Network
                 if (weightA != weightB) return weightB.CompareTo(weightA);
                 return b.Suit.CompareTo(a.Suit);
             });
+        }
+
+        void RemoveCardsFromLocalHand(Card[] cards)
+        {
+             // 简单的移除逻辑：根据ID或值移除
+             foreach(var card in cards)
+             {
+                 for(int i=0; i<MyHand.Count; i++)
+                 {
+                     if(MyHand[i].Suit == card.Suit && MyHand[i].Rank == card.Rank)
+                     {
+                         MyHand.RemoveAt(i);
+                         break;
+                     }
+                 }
+             }
+             OnHandReceived?.Invoke(); // Refresh UI
         }
 
         void OnSeatChanged(int oldVal, int newVal)

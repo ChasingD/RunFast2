@@ -4,6 +4,7 @@ using Mirror;
 using System.Linq;
 using RunFast2.Scripts.Network;
 using RunFast2.Scripts.Model;
+using RunFast2.Scripts.Logic;
 
 public class PokerManager : NetworkBehaviour
 {
@@ -11,10 +12,17 @@ public class PokerManager : NetworkBehaviour
 
     private List<Card> _deck = new List<Card>();
 
-    [SyncVar]
+    [SyncVar(hook = nameof(OnTurnChanged))]
     public int CurrentPlayerIndex = -1; // Index in the seatedPlayers array
 
-    public RoomSettings CurrentSettings = new RoomSettings(); // Default settings
+    // Current Round State
+    public PokerHand LastHand = null;
+    public int LastPlayerSeatIndex = -1; // The seat index of the player who played LastHand
+
+    public RoomSettings CurrentSettings = new RoomSettings();
+
+    // Events for UI (Local)
+    public static event System.Action<int> OnTurnChangedEvent;
 
     private void Awake()
     {
@@ -44,14 +52,14 @@ public class PokerManager : NetworkBehaviour
             return;
         }
 
+        LastHand = null;
+        LastPlayerSeatIndex = -1;
+
         InitDeck();
         ShuffleDeck();
     
-        // Deal cards and get the hands back so we can check who has what
-        var hands = DealCards(seatedPlayers);
-
-        // Determine First Player
-        DetermineStartingPlayer(seatedPlayers, hands);
+        DealCards(seatedPlayers);
+        DetermineStartingPlayer(seatedPlayers);
     }
 
     [Server]
@@ -61,34 +69,18 @@ public class PokerManager : NetworkBehaviour
 
         if (CurrentSettings.DeckType == DeckType.Standard48)
         {
-            // Logic: 48 Cards
-            // Remove: 3x2 (Diamond, Club, Heart), 1x Spade Ace
-            // Keep: Spade 2
-
             foreach (CardSuit suit in System.Enum.GetValues(typeof(CardSuit)))
             {
                 foreach (CardRank rank in System.Enum.GetValues(typeof(CardRank)))
                 {
-                    // CardRank: Three=3 ... Ace=14, Two=15
-
-                    if (rank == CardRank.Two)
-                    {
-                        // Remove if NOT Spade (Remove Diamond/Club/Heart 2)
-                        if (suit != CardSuit.Spade) continue;
-                    }
-                    else if (rank == CardRank.Ace)
-                    {
-                        // Remove if Spade (Remove Spade Ace)
-                        if (suit == CardSuit.Spade) continue;
-                    }
-
+                    if (rank == CardRank.Two && suit != CardSuit.Spade) continue;
+                    if (rank == CardRank.Ace && suit == CardSuit.Spade) continue;
                     _deck.Add(new Card(suit, rank));
                 }
             }
         }
         else
         {
-            // Default 52 cards fallback
             foreach (CardSuit suit in System.Enum.GetValues(typeof(CardSuit)))
             {
                 foreach (CardRank rank in System.Enum.GetValues(typeof(CardRank)))
@@ -97,8 +89,6 @@ public class PokerManager : NetworkBehaviour
                 }
             }
         }
-
-        Debug.Log($"Deck Initialized with {_deck.Count} cards.");
     }
 
     [Server]
@@ -117,7 +107,7 @@ public class PokerManager : NetworkBehaviour
     }
 
     [Server]
-    List<List<Card>> DealCards(CardPlayer[] players)
+    void DealCards(CardPlayer[] players)
     {
         List<List<Card>> hands = new List<List<Card>>();
         for (int i = 0; i < players.Length; i++) hands.Add(new List<Card>());
@@ -131,54 +121,167 @@ public class PokerManager : NetworkBehaviour
         for (int i = 0; i < players.Length; i++)
         {
             CardPlayer player = players[i];
+            player.ServerHand.Clear();
+            player.ServerHand.AddRange(hands[i]);
             player.TargetRpcReceiveHand(player.connectionToClient, hands[i].ToArray());
-            Debug.Log($"Server sent {hands[i].Count} cards to Player {player.netId} (Seat {player.SeatIndex})");
         }
-
-        return hands;
     }
 
     [Server]
-    void DetermineStartingPlayer(CardPlayer[] players, List<List<Card>> hands)
+    void DetermineStartingPlayer(CardPlayer[] players)
     {
-        int startingIndex = 0; // Default to first player
+        int startingIndex = 0;
 
         if (CurrentSettings.FirstTurn == FirstTurnRule.Heart3)
         {
-            // Find who has Heart 3
             bool found = false;
-            for (int i = 0; i < hands.Count; i++)
+            for (int i = 0; i < players.Length; i++)
             {
-                foreach (var card in hands[i])
+                foreach (var card in players[i].ServerHand)
                 {
                     if (card.Suit == CardSuit.Heart && card.Rank == CardRank.Three)
                     {
                         startingIndex = i;
                         found = true;
-                        Debug.Log($"Player {players[i].SeatIndex} has Heart 3 and starts.");
                         break;
                     }
                 }
                 if (found) break;
             }
-            if (!found)
-            {
-                Debug.LogWarning("Heart 3 not found in any hand! (Maybe 2 player game?) Defaulting to index 0.");
-            }
-        }
-        else if (CurrentSettings.FirstTurn == FirstTurnRule.Rotate)
-        {
-            // Needs game state to know who was previous, for now random or 0
-             Debug.Log("FirstTurnRule: Rotate. (Not fully implemented, using 0)");
-        }
-        else if (CurrentSettings.FirstTurn == FirstTurnRule.Winner)
-        {
-             Debug.Log("FirstTurnRule: Winner. (Not fully implemented, using 0)");
         }
 
         CurrentPlayerIndex = startingIndex;
-        // Notify players whose turn it is?
-        // players[CurrentPlayerIndex].TargetRpcYourTurn(...)
-        // For now just setting the SyncVar is enough for clients to know if they observe it.
+    }
+
+    // ==========================================
+    // Game Loop Implementation
+    // ==========================================
+
+    [Server]
+    public void OnPlayerPlayCard(CardPlayer player, Card[] cards)
+    {
+        var seatedPlayers = GetSeatedPlayers();
+        if (CurrentPlayerIndex < 0 || CurrentPlayerIndex >= seatedPlayers.Length) return;
+
+        CardPlayer currentPlayer = seatedPlayers[CurrentPlayerIndex];
+
+        if (player != currentPlayer)
+        {
+            Debug.LogWarning($"Player {player.SeatIndex} tried to play out of turn.");
+            return;
+        }
+
+        List<Card> cardList = new List<Card>(cards);
+        if (!HasCards(player, cardList))
+        {
+            Debug.LogWarning($"Player {player.SeatIndex} does not have the cards.");
+            return;
+        }
+
+        bool threeAsBomb = CurrentSettings.ThreeAsBomb;
+        PokerHand hand = PokerRules.AnalyzeHand(cardList, threeAsBomb);
+
+        if (hand.Type == HandType.Invalid)
+        {
+            Debug.LogWarning($"Player {player.SeatIndex} played invalid hand.");
+            return;
+        }
+
+        bool isNewRound = (LastHand == null) || (LastPlayerSeatIndex == player.SeatIndex);
+
+        if (!isNewRound)
+        {
+            if (!PokerRules.CanBeat(LastHand, hand))
+            {
+                Debug.LogWarning($"Player {player.SeatIndex} hand cannot beat last hand.");
+                return;
+            }
+        }
+
+        // --- Execute Play ---
+        foreach (var c in cardList)
+        {
+            var serverCard = player.ServerHand.FirstOrDefault(sc => sc.Suit == c.Suit && sc.Rank == c.Rank);
+            player.ServerHand.Remove(serverCard);
+        }
+
+        LastHand = hand;
+        LastPlayerSeatIndex = player.SeatIndex;
+
+        // Correct RPC Call: Invoke ClientRpc on the NetworkBehaviour
+        player.RpcOnPlayerPlayed(player.SeatIndex, cards, (int)hand.Type);
+
+        if (player.ServerHand.Count == 0)
+        {
+            player.RpcGameFinished(player.SeatIndex);
+            return;
+        }
+
+        NextTurn(seatedPlayers);
+    }
+
+    [Server]
+    public void OnPlayerPass(CardPlayer player)
+    {
+        var seatedPlayers = GetSeatedPlayers();
+        if (CurrentPlayerIndex < 0 || CurrentPlayerIndex >= seatedPlayers.Length) return;
+
+        CardPlayer currentPlayer = seatedPlayers[CurrentPlayerIndex];
+
+        if (player != currentPlayer) return;
+
+        if (LastPlayerSeatIndex == player.SeatIndex)
+        {
+            Debug.LogWarning($"Player {player.SeatIndex} is round leader and cannot pass.");
+            return;
+        }
+
+        player.RpcOnPlayerPassed(player.SeatIndex);
+
+        NextTurn(seatedPlayers);
+    }
+
+    [Server]
+    void NextTurn(CardPlayer[] seatedPlayers)
+    {
+        int playerCount = seatedPlayers.Length;
+        CurrentPlayerIndex = (CurrentPlayerIndex + 1) % playerCount;
+
+        CardPlayer nextPlayer = seatedPlayers[CurrentPlayerIndex];
+
+        if (nextPlayer.SeatIndex == LastPlayerSeatIndex)
+        {
+             LastHand = null;
+             Debug.Log($"Player {nextPlayer.SeatIndex} wins round. New round.");
+        }
+
+        Debug.Log($"Next Turn: Player {nextPlayer.SeatIndex}");
+    }
+
+    void OnTurnChanged(int oldVal, int newVal)
+    {
+        CurrentPlayerIndex = newVal;
+        OnTurnChangedEvent?.Invoke(newVal);
+        Debug.Log($"Turn Changed: {oldVal} -> {newVal}");
+    }
+
+    CardPlayer[] GetSeatedPlayers()
+    {
+        return FindObjectsOfType<CardPlayer>()
+            .Where(p => p.SeatIndex != -1)
+            .OrderBy(p => p.SeatIndex)
+            .ToArray();
+    }
+
+    bool HasCards(CardPlayer player, List<Card> cardsToCheck)
+    {
+        List<Card> tempHand = new List<Card>(player.ServerHand);
+        foreach (var c in cardsToCheck)
+        {
+            var found = tempHand.FirstOrDefault(h => h.Suit == c.Suit && h.Rank == c.Rank);
+            if (found.Rank == 0) return false;
+            tempHand.Remove(found);
+        }
+        return true;
     }
 }
