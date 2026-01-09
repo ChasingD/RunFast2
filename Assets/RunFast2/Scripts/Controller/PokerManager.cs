@@ -1,32 +1,38 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEngine;
 using Mirror;
 using System.Linq;
 using RunFast2.Scripts.Network;
+using RunFast2.Scripts.Model;
 
 public class PokerManager : NetworkBehaviour
 {
-    // 单例模式，方便访问 (注意：网络游戏中单例要谨慎，确保场景切换处理得当)
     public static PokerManager Instance;
 
     private List<Card> _deck = new List<Card>();
+
+    [SyncVar]
+    public int CurrentPlayerIndex = -1; // Index in the seatedPlayers array
+
+    public RoomSettings CurrentSettings = new RoomSettings(); // Default settings
 
     private void Awake()
     {
         Instance = this;
     }
 
-    // 只有服务器能调用此方法开始游戏
-    // 在 PokerManager.cs 中
+    [Server]
+    public void InitializeGame(RoomSettings settings)
+    {
+        CurrentSettings = settings;
+        StartGame();
+    }
 
     [Server]
     public void StartGame()
     {
-        // 1. 获取所有玩家
         var allPlayers = FindObjectsOfType<CardPlayer>();
     
-        // 2. 筛选出已经入座的玩家 (SeatIndex != -1) 并按座位号排序
-        //    这步很重要！如果不排序，发牌顺序就会乱，座位0的人可能拿到了座位2的牌
         var seatedPlayers = allPlayers
             .Where(p => p.SeatIndex != -1)
             .OrderBy(p => p.SeatIndex)
@@ -34,29 +40,65 @@ public class PokerManager : NetworkBehaviour
 
         if (seatedPlayers.Length < 2) 
         {
-            Debug.LogWarning("入座人数不足，无法开始");
+            Debug.LogWarning("Not enough players seated to start.");
             return;
         }
 
         InitDeck();
         ShuffleDeck();
     
-        // 3. 给筛选出的 seatedPlayers 发牌
-        DealCards(seatedPlayers);
+        // Deal cards and get the hands back so we can check who has what
+        var hands = DealCards(seatedPlayers);
+
+        // Determine First Player
+        DetermineStartingPlayer(seatedPlayers, hands);
     }
 
     [Server]
     void InitDeck()
     {
         _deck.Clear();
-        foreach (CardSuit suit in System.Enum.GetValues(typeof(CardSuit)))
+
+        if (CurrentSettings.DeckType == DeckType.Standard48)
         {
-            foreach (CardRank rank in System.Enum.GetValues(typeof(CardRank)))
+            // Logic: 48 Cards
+            // Remove: 3x2 (Diamond, Club, Heart), 1x Spade Ace
+            // Keep: Spade 2
+
+            foreach (CardSuit suit in System.Enum.GetValues(typeof(CardSuit)))
             {
-                // 这里可以剔除掉某些牌（如果规则需要）
-                _deck.Add(new Card(suit, rank));
+                foreach (CardRank rank in System.Enum.GetValues(typeof(CardRank)))
+                {
+                    // CardRank: Three=3 ... Ace=14, Two=15
+
+                    if (rank == CardRank.Two)
+                    {
+                        // Remove if NOT Spade (Remove Diamond/Club/Heart 2)
+                        if (suit != CardSuit.Spade) continue;
+                    }
+                    else if (rank == CardRank.Ace)
+                    {
+                        // Remove if Spade (Remove Spade Ace)
+                        if (suit == CardSuit.Spade) continue;
+                    }
+
+                    _deck.Add(new Card(suit, rank));
+                }
             }
         }
+        else
+        {
+            // Default 52 cards fallback
+            foreach (CardSuit suit in System.Enum.GetValues(typeof(CardSuit)))
+            {
+                foreach (CardRank rank in System.Enum.GetValues(typeof(CardRank)))
+                {
+                    _deck.Add(new Card(suit, rank));
+                }
+            }
+        }
+
+        Debug.Log($"Deck Initialized with {_deck.Count} cards.");
     }
 
     [Server]
@@ -75,32 +117,68 @@ public class PokerManager : NetworkBehaviour
     }
 
     [Server]
-    void DealCards(CardPlayer[] players)
+    List<List<Card>> DealCards(CardPlayer[] players)
     {
-        // 临时存储每个人的牌
         List<List<Card>> hands = new List<List<Card>>();
         for (int i = 0; i < players.Length; i++) hands.Add(new List<Card>());
 
-        // 轮流发牌
         for (int i = 0; i < _deck.Count; i++)
         {
-            // 简单逻辑：如果是3人局，全发完；如果是2人局，可能会留牌
-            // 这里假设 3人 均分
             int seatIndex = i % players.Length;
             hands[seatIndex].Add(_deck[i]);
         }
 
-        // 将牌通过网络发送给对应的客户端
         for (int i = 0; i < players.Length; i++)
         {
             CardPlayer player = players[i];
-            
-            // 使用 TargetRpc 定向发送给特定玩家 (安全！玩家A收不到玩家B的牌数据)
-            // 注意：TargetRpc 的第一个参数是 NetworkConnection，Mirror 会自动处理
-            // 这里我们需要把 List 转成 Array，因为 Mirror 对 Array 的支持最基础且稳定
             player.TargetRpcReceiveHand(player.connectionToClient, hands[i].ToArray());
-            
-            Debug.Log($"服务器已向玩家 {player.netId} 发送了 {hands[i].Count} 张牌");
+            Debug.Log($"Server sent {hands[i].Count} cards to Player {player.netId} (Seat {player.SeatIndex})");
         }
+
+        return hands;
+    }
+
+    [Server]
+    void DetermineStartingPlayer(CardPlayer[] players, List<List<Card>> hands)
+    {
+        int startingIndex = 0; // Default to first player
+
+        if (CurrentSettings.FirstTurn == FirstTurnRule.Heart3)
+        {
+            // Find who has Heart 3
+            bool found = false;
+            for (int i = 0; i < hands.Count; i++)
+            {
+                foreach (var card in hands[i])
+                {
+                    if (card.Suit == CardSuit.Heart && card.Rank == CardRank.Three)
+                    {
+                        startingIndex = i;
+                        found = true;
+                        Debug.Log($"Player {players[i].SeatIndex} has Heart 3 and starts.");
+                        break;
+                    }
+                }
+                if (found) break;
+            }
+            if (!found)
+            {
+                Debug.LogWarning("Heart 3 not found in any hand! (Maybe 2 player game?) Defaulting to index 0.");
+            }
+        }
+        else if (CurrentSettings.FirstTurn == FirstTurnRule.Rotate)
+        {
+            // Needs game state to know who was previous, for now random or 0
+             Debug.Log("FirstTurnRule: Rotate. (Not fully implemented, using 0)");
+        }
+        else if (CurrentSettings.FirstTurn == FirstTurnRule.Winner)
+        {
+             Debug.Log("FirstTurnRule: Winner. (Not fully implemented, using 0)");
+        }
+
+        CurrentPlayerIndex = startingIndex;
+        // Notify players whose turn it is?
+        // players[CurrentPlayerIndex].TargetRpcYourTurn(...)
+        // For now just setting the SyncVar is enough for clients to know if they observe it.
     }
 }
