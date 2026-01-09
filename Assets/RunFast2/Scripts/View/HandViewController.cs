@@ -28,9 +28,8 @@ namespace RunFast2.Scripts.View
             if (PlayButton) PlayButton.onClick.AddListener(OnPlayClicked);
             if (PassButton) PassButton.onClick.AddListener(OnPassClicked);
 
-            // Subscribe to Events
-            CardPlayer.OnHandReceived += RefreshHand;
-            CardPlayer.OnPlayerInfoUpdated += OnPlayerUpdated; // To catch when local player is ready/set
+            // Subscribe to Static Events
+            CardPlayer.OnPlayerInfoUpdated += OnPlayerUpdated;
             PokerManager.OnTurnChangedEvent += OnTurnChanged;
 
             // Try to find local player if already exists
@@ -39,9 +38,15 @@ namespace RunFast2.Scripts.View
 
         private void OnDestroy()
         {
-            CardPlayer.OnHandReceived -= RefreshHand;
+            // Unsubscribe Static Events
             CardPlayer.OnPlayerInfoUpdated -= OnPlayerUpdated;
             PokerManager.OnTurnChangedEvent -= OnTurnChanged;
+
+            // Unsubscribe Instance Events
+            if (_localPlayer != null)
+            {
+                _localPlayer.OnHandReceived -= RefreshHand;
+            }
         }
 
         private void Update()
@@ -57,11 +62,30 @@ namespace RunFast2.Scripts.View
             {
                 if (p.isLocalPlayer)
                 {
-                    _localPlayer = p;
-                    RefreshHand(); // Initial refresh
-                    CheckTurnButtons();
+                    SetLocalPlayer(p);
                     break;
                 }
+            }
+        }
+
+        void SetLocalPlayer(CardPlayer p)
+        {
+            if (_localPlayer == p) return;
+
+            // Unsubscribe old
+            if (_localPlayer != null)
+            {
+                _localPlayer.OnHandReceived -= RefreshHand;
+            }
+
+            _localPlayer = p;
+
+            // Subscribe new
+            if (_localPlayer != null)
+            {
+                _localPlayer.OnHandReceived += RefreshHand;
+                RefreshHand(); // Initial refresh
+                CheckTurnButtons();
             }
         }
 
@@ -71,8 +95,7 @@ namespace RunFast2.Scripts.View
         {
             if (player.isLocalPlayer)
             {
-                _localPlayer = player;
-                CheckTurnButtons();
+                SetLocalPlayer(player);
             }
         }
 
@@ -84,7 +107,6 @@ namespace RunFast2.Scripts.View
         void RefreshHand()
         {
             if (_localPlayer == null) return;
-            // if (_localPlayer.MyHand.Count == 0) return; // Maybe keep empty container?
 
             // Clear old views
             foreach (Transform child in HandContainer)
