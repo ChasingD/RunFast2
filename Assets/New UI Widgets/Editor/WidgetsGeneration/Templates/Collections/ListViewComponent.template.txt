@@ -1,0 +1,188 @@
+﻿namespace {0:WidgetsNamespace}
+{{
+	/// <summary>
+	/// ListView component for the {0:SourceClassShortName}.
+	/// </summary>
+	[UIWidgets.Attributes.DataBindSupport]
+	public partial class {0:ListViewComponentClass} : UIWidgets.ListViewItem, UIWidgets.IViewData<{0:SourceClass}>
+	{{
+		/// <inheritdoc/>
+		protected override void GraphicsBackgroundInit()
+		{{
+			base.GraphicsBackgroundInit();
+
+			if (CellsBackgroundVersion == 0)
+			{{
+				using var _ = UIWidgets.Pool.ListPool<UnityEngine.UI.Graphic>.Get(out var result);
+
+				#if UITHEMES_INSTALLED && UIWIDGETS_LEGACY_STYLE
+				foreach (UnityEngine.Transform child in transform)
+				{{
+					var graphic = child.GetComponent<UnityEngine.UI.Graphic>();
+					if (graphic != null)
+					{{
+						result.Add(graphic);
+					}}
+				}}
+				#else
+				result.Add(GetComponent<UnityEngine.UI.Graphic>());
+				#endif
+
+				if (result.Count > 0)
+				{{
+					cellsBackgrounds.Clear();
+					cellsBackgrounds.AddRange(result);
+
+					CellsBackgroundVersion = 1;
+				}}
+			}}
+		}}
+
+		/// <inheritdoc/>
+		protected override void GraphicsForegroundInit()
+		{{
+			if (GraphicsForegroundVersion == 0)
+			{{{0:TextFields@
+				foregrounds.Add(UIWidgets.UtilitiesUI.GetGraphic([0:WidgetFieldName]));}
+
+				if (!UIWidgets.UtilitiesCollections.AllNull(foregrounds))
+				{{
+					foregrounds.RemoveAll(x => x == null);
+					GraphicsForegroundVersion = 1;
+				}}
+			}}
+
+			base.GraphicsForegroundInit();
+		}}
+{0:Fields@
+		/// <summary>
+		/// The [0:FieldName].
+		/// </summary>
+		public [0:WidgetClass] [0:WidgetFieldName];
+}
+		{0:SourceClass} item;
+
+		/// <summary>
+		/// Gets the current item.
+		/// </summary>
+		[UIWidgets.Attributes.DataBindField]
+		public {0:SourceClass} Item
+		{{
+			get => item;
+
+			set
+			{{
+				item = value;
+
+				#if UNITY_EDITOR
+				{0:IfAutocomplete@name = UIWidgets.Utilities.IsNull(item) ? "DefaultItem " + Index.ToString() : item.[0:AutocompleteField][0:AutocompleteFieldWrapperField];}{0:!IfAutocomplete@name = "DefaultItem " + Index;}
+				#endif
+
+				if (Tooltip != null)
+				{{
+					if (!UIWidgets.Utilities.IsNull(item))
+					{{
+						Tooltip.Register(gameObject, item, TooltipSettings);
+					}}
+					else
+					{{
+						Tooltip.Unregister(gameObject);
+					}}
+				}}
+
+				UpdateView();
+
+				OnItemChanged.Invoke();
+			}}
+		}}
+
+		/// <summary>
+		/// Tooltip.
+		/// </summary>
+		[UnityEngine.SerializeField]
+		protected {0:TooltipClass} tooltip;
+
+		/// <summary>
+		/// Tooltip.
+		/// </summary>
+		public {0:TooltipClass} Tooltip
+		{{
+			get => tooltip;
+
+			set
+			{{
+				if (tooltip != null)
+				{{
+					Tooltip.Unregister(gameObject);
+				}}
+
+				tooltip = value;
+
+				if ((tooltip != null) && !UIWidgets.Utilities.IsNull(Item))
+				{{
+					Tooltip.Register(gameObject, Item, TooltipSettings);
+				}}
+			}}
+		}}
+
+		/// <summary>
+		/// Tooltip settings.
+		/// </summary>
+		[UnityEngine.SerializeField]
+		protected UIWidgets.TooltipSettings TooltipSettings = new UIWidgets.TooltipSettings(UIWidgets.TooltipPosition.TopCenter);
+
+		/// <summary>
+		/// Sets component data with specified item.
+		/// </summary>
+		/// <param name="item">Item.</param>
+		public virtual void SetData({0:SourceClass} item) => Item = item;
+
+		/// <inheritdoc/>
+		public override void LocaleChanged() => UpdateView();
+
+		/// <summary>
+		/// Update view.
+		/// </summary>
+		protected virtual void UpdateView()
+		{{
+			if (UIWidgets.Utilities.IsNull(Item))
+			{{
+				return;
+			}}
+{0:Fields@
+			if ([0:WidgetFieldName] != null)
+			[[
+				[0:WidgetFieldName].[0:WidgetValueField] = Item.[0:FieldName][0:WrapperField][0:FieldFormat];
+			]]
+}{0:ImageFieldsNullable@
+			// set transparent color if no icon
+			if ([0:WidgetFieldName] != null)
+			[[
+				[0:WidgetFieldName].color = ([0:WidgetFieldName].[0:WidgetValueField] == null) ? UnityEngine.Color.clear : UnityEngine.Color.white;
+			]]
+}
+		}}
+
+		/// <inheritdoc/>
+		public override void MovedToCache()
+		{{{0:ImageFieldsNullable@
+			if ([0:WidgetFieldName] != null)
+			[[
+				[0:WidgetFieldName].[0:WidgetValueField] = null;
+			]]
+}
+			if (Tooltip != null)
+			{{
+				Tooltip.Unregister(gameObject);
+			}}
+		}}
+
+		/// <inheritdoc/>
+		public override void SetThemeImagesPropertiesOwner(UnityEngine.Component owner)
+		{{
+			base.SetThemeImagesPropertiesOwner(owner);{0:ImageFields@
+			UIThemes.Utilities.SetTargetOwner(typeof([0:FieldType]), [0:WidgetFieldName], nameof([0:WidgetFieldName].[0:WidgetValueField]), owner);
+			UIThemes.Utilities.SetTargetOwner(typeof(UnityEngine.Color), [0:WidgetFieldName], nameof([0:WidgetFieldName].color), owner);}
+		}}
+	}}
+}}

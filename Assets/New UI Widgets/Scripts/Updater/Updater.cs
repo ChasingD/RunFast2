@@ -1,0 +1,239 @@
+﻿namespace UIWidgets
+{
+	using System;
+
+	/// <summary>
+	/// Updater.
+	/// Replace Unity Update() with custom one without reflection.
+	/// </summary>
+	public static class Updater
+	{
+		static IUpdaterProxy ProxyInstance => StaticFields.Instance.UpdaterProxyInstance;
+
+		/// <summary>
+		/// Proxy to run Update().
+		/// </summary>
+		public static IUpdaterProxy Proxy
+		{
+			get => StaticFields.Instance.UpdaterProxy;
+			set => StaticFields.Instance.UpdaterProxy = value;
+		}
+
+		/// <summary>
+		/// Add target.
+		/// </summary>
+		/// <param name="target">Target.</param>
+		public static void Add(IUpdatable target)
+		{
+			var p = Proxy;
+			if (!Utilities.IsNull(p))
+			{
+				p.Add(target);
+			}
+		}
+
+		/// <summary>
+		/// Remove target.
+		/// </summary>
+		/// <param name="target">Target.</param>
+		public static void Remove(IUpdatable target)
+		{
+			var p = ProxyInstance;
+			if (!Utilities.IsNull(p))
+			{
+				p.Remove(target);
+			}
+		}
+
+		/// <summary>
+		/// Add target to LateUpdate.
+		/// </summary>
+		/// <param name="target">Target.</param>
+		public static void AddLateUpdate(ILateUpdatable target)
+		{
+			var p = Proxy;
+			if (!Utilities.IsNull(p))
+			{
+				p.AddLateUpdate(target);
+			}
+		}
+
+		/// <summary>
+		/// Remove target from LateUpdate.
+		/// </summary>
+		/// <param name="target">Target.</param>
+		public static void RemoveLateUpdate(ILateUpdatable target)
+		{
+			var p = ProxyInstance;
+			if (!Utilities.IsNull(p))
+			{
+				p.RemoveLateUpdate(target);
+			}
+		}
+
+		/// <summary>
+		/// Add target to FixedUpdate.
+		/// </summary>
+		/// <param name="target">target.</param>
+		public static void AddFixedUpdate(IFixedUpdatable target)
+		{
+			var p = Proxy;
+			if (!Utilities.IsNull(p))
+			{
+				p.AddFixedUpdate(target);
+			}
+		}
+
+		/// <summary>
+		/// Remove target from FixedUpdate.
+		/// </summary>
+		/// <param name="target">Target.</param>
+		public static void RemoveFixedUpdate(IFixedUpdatable target)
+		{
+			var p = ProxyInstance;
+			if (!Utilities.IsNull(p))
+			{
+				p.RemoveFixedUpdate(target);
+			}
+		}
+
+		/// <summary>
+		/// Add target to run update only once.
+		/// </summary>
+		/// <param name="target">Target.</param>
+		public static void RunOnce(IUpdatable target)
+		{
+			var p = Proxy;
+			if (!Utilities.IsNull(p))
+			{
+				p.RunOnce(target);
+			}
+		}
+
+		/// <summary>
+		/// Add action to run only once.
+		/// </summary>
+		/// <param name="action">Action.</param>
+		[Obsolete("Replaced with RunOnce(UnityEngine.Object owner, Action action).")]
+		public static void RunOnce(Action action)
+		{
+			throw new NotSupportedException("This method replaced with RunOnce(UnityEngine.Object owner, Action action).");
+		}
+
+		/// <summary>
+		/// Add action to run only once.
+		/// </summary>
+		/// <param name="owner">Owner.</param>
+		/// <param name="action">Action.</param>
+		public static void RunOnce(UnityEngine.Object owner, Action action)
+		{
+			var p = Proxy;
+			if (!Utilities.IsNull(p))
+			{
+				p.RunOnce(owner, action);
+			}
+		}
+
+		/// <summary>
+		/// Remove target from run update only once.
+		/// </summary>
+		/// <param name="target">Target.</param>
+		public static void RemoveRunOnce(IUpdatable target)
+		{
+			var p = ProxyInstance;
+			if (!Utilities.IsNull(p))
+			{
+				p.RemoveRunOnce(target);
+			}
+		}
+
+		/// <summary>
+		/// Remove action from run only once.
+		/// </summary>
+		/// <param name="action">Action.</param>
+		public static void RemoveRunOnce(Action action)
+		{
+			var p = ProxyInstance;
+			if (!Utilities.IsNull(p))
+			{
+				p.RemoveRunOnce(action);
+			}
+		}
+
+		/// <summary>
+		/// Add target to run update only once at next frame.
+		/// </summary>
+		/// <param name="target">Target.</param>
+		public static void RunOnceNextFrame(IUpdatable target)
+		{
+			var p = Proxy;
+			if (!Utilities.IsNull(p))
+			{
+				p.RunOnceNextFrame(target);
+			}
+		}
+
+		/// <summary>
+		/// Add action to run only once at next frame.
+		/// </summary>
+		/// <param name="action">Action.</param>
+		[Obsolete("Replaced with RunOnceNextFrame(UnityEngine.Object owner, Action action).")]
+		public static void RunOnceNextFrame(Action action)
+		{
+			throw new NotSupportedException("This method replaced with RunOnceNextFrame(UnityEngine.Object owner, Action action).");
+		}
+
+		/// <summary>
+		/// Add action to run only once at next frame.
+		/// </summary>
+		/// <param name="owner">Owner.</param>
+		/// <param name="action">Action.</param>
+		public static void RunOnceNextFrame(UnityEngine.Object owner, Action action)
+		{
+			var p = Proxy;
+			if (!Utilities.IsNull(p))
+			{
+				p.RunOnceNextFrame(owner, action);
+			}
+		}
+
+		/// <summary>
+		/// Remove target from run update only once at next frame.
+		/// </summary>
+		/// <param name="target">Target.</param>
+		public static void RemoveRunOnceNextFrame(IUpdatable target)
+		{
+			var p = ProxyInstance;
+			if (!Utilities.IsNull(p))
+			{
+				p.RemoveRunOnceNextFrame(target);
+			}
+		}
+
+		/// <summary>
+		/// Remove action from run only once at next frame.
+		/// </summary>
+		/// <param name="owner">Owner.</param>
+		public static void RemoveRunOnceNextFrameByOwner(UnityEngine.Object owner)
+		{
+			var p = Proxy;
+			if (!Utilities.IsNull(p) && !Utilities.IsNull(owner))
+			{
+				p.RemoveRunOnceNextFrameByOwner(owner);
+			}
+		}
+
+		/// <summary>
+		/// Remove action from run only once at next frame.
+		/// </summary>
+		/// <param name="action">Action.</param>
+		public static void RemoveRunOnceNextFrame(Action action)
+		{
+			var p = ProxyInstance;
+			if (!Utilities.IsNull(p))
+			{
+				p.RemoveRunOnceNextFrame(action);
+			}
+		}
+	}
+}
