@@ -11,7 +11,7 @@ namespace RunFast2.Scripts.Controller
         [Header("References")]
         public SeatView[] Seats;     // 拖入 3 个 SeatView
         public Button ReadyButton;   // 屏幕下方的准备按钮
-        public Button StartGameButton; // (可选) 只有房主可见的开始按钮
+        // public Button StartGameButton; // (可选) 只有房主可见的开始按钮
 
         private int _myCurrentSeat = -1; // 记录本地玩家坐在哪
 

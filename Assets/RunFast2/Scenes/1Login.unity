@@ -7767,8 +7767,8 @@ MonoBehaviour:
       m_Calls: []
   m_text: Enter text...
   m_isRightToLeft: 0
-  m_fontAsset: {fileID: 11400000, guid: 9937053da6c4c334b9dd3818a5a4ed48, type: 2}
-  m_sharedMaterial: {fileID: -8663354786762518545, guid: 9937053da6c4c334b9dd3818a5a4ed48, type: 2}
+  m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
+  m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_fontSharedMaterials: []
   m_fontMaterial: {fileID: 0}
   m_fontMaterials: []
@@ -21228,8 +21228,8 @@ MonoBehaviour:
       m_Calls: []
   m_text: "ballshe@163.com\u200B"
   m_isRightToLeft: 0
-  m_fontAsset: {fileID: 11400000, guid: 9937053da6c4c334b9dd3818a5a4ed48, type: 2}
-  m_sharedMaterial: {fileID: -8663354786762518545, guid: 9937053da6c4c334b9dd3818a5a4ed48, type: 2}
+  m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
+  m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_fontSharedMaterials: []
   m_fontMaterial: {fileID: 0}
   m_fontMaterials: []
