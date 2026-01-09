@@ -8,7 +8,7 @@ namespace RunFast2.Scripts.Logic
 {
     public static class PokerRules
     {
-        public static PokerHand AnalyzeHand(List<Card> cards)
+        public static PokerHand AnalyzeHand(List<Card> cards, bool threeAsBomb = false)
         {
             if (cards == null || cards.Count == 0) return new PokerHand(HandType.Invalid, 0, cards ?? new List<Card>());
 
@@ -35,7 +35,16 @@ namespace RunFast2.Scripts.Logic
             if (count == 3)
             {
                 if (cards[0].GetLogicWeight() == cards[2].GetLogicWeight())
+                {
+                    // AAA Bomb Rule
+                    if (threeAsBomb && cards[0].Rank == CardRank.Ace)
+                    {
+                        // AAA is the largest Bomb. Give it very high weight.
+                        return new PokerHand(HandType.Bomb, 999, cards);
+                    }
+
                     return new PokerHand(HandType.Triplet, firstWeight, cards);
+                }
             }
 
             // --- Bomb (4) ---
@@ -127,6 +136,7 @@ namespace RunFast2.Scripts.Logic
             if (curr.Type == HandType.Bomb)
             {
                 if (prev.Type != HandType.Bomb) return true;
+                // AAA (weight 999) will beat standard bombs (weight <= 15)
                 return curr.Weight > prev.Weight;
             }
             if (prev.Type == HandType.Bomb) return false;
@@ -174,10 +184,7 @@ namespace RunFast2.Scripts.Logic
 
         private static bool IsConsecutive(List<int> weights)
         {
-            if (weights.Count < 2) return true; // Single triplet is trivially consecutive? But Airplane usually needs 2+
-            // Actually Airplane definition varies.
-            // If N=1 (Count=5), it's just TripletWithTwo.
-            // So Airplane implies N >= 2.
+            if (weights.Count < 2) return true;
 
             for (int i = 0; i < weights.Count - 1; i++)
             {
