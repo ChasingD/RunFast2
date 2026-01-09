@@ -4,5 +4,14 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
+  m_Scenes:
+  - enabled: 1
+    path: Assets/RunFast2/Scenes/1Login.unity
+    guid: 62b7a6f9c470c61418dbe020459f6388
+  - enabled: 1
+    path: Assets/RunFast2/Scenes/2Lobby.unity
+    guid: f6bf66ef0aef50347b2564e87d8e743d
+  - enabled: 1
+    path: Assets/RunFast2/Scenes/3Game.unity
+    guid: cf7ef396e6fa6da46ab0897fb5e2c04d
   m_configObjects: {}

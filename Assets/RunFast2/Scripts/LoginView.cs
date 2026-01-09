@@ -4,6 +4,7 @@ using RunFast2.Scripts.Models;
 using RunFast2.Scripts.Services;
 using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 // 引用 AuthService
 
@@ -16,7 +17,7 @@ namespace RunFast2.Scripts
         [SerializeField] private Button signUpButton;
         [SerializeField] private TMP_InputField emailInput = null!;
         [SerializeField] private TMP_InputField passwordInput = null!;
-        
+        [SerializeField] private string lobbySceneName = "2Lobby";
         // 不再需要直接引用 SupabaseManager，因为 AuthService 已经处理了
         
         private void Start()
@@ -57,8 +58,14 @@ namespace RunFast2.Scripts
                     if (user != null)
                     {
                         ShowMessage($"登录成功: {user.Email}");
+                        string email = user.Email;
+                        string shortName = email.Contains("@") ? email.Split('@')[0] : email;
+            
+                        UserSession.CurrentPlayerName = shortName;
+                        UserSession.UserId = user.Id;
                         Debug.Log("跳转场景中...");
                         // TODO: SceneManager.LoadScene("GameScene");
+                        SceneManager.LoadScene(lobbySceneName);
                     }
                 }
                 else
