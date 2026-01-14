@@ -16,6 +16,7 @@ namespace RunFast2.Scripts
         [Tooltip("请将 Dialog 的 Prefab 拖拽到这里，而不是场景里的对象")]
         protected Dialog DialogSampleTemplate;
 
+        [SerializeField] private GameObject loadingPanel;
         private void Awake()
         {
             // 2. 单例初始化与 DontDestroyOnLoad
@@ -112,6 +113,11 @@ namespace RunFast2.Scripts
             });
 
             ShowDialog(title, message, new DialogButton[] { btnCancel, btnConfirm }, "Yes");
+        }
+
+        public void ShowLoading(bool show)
+        {
+            loadingPanel.SetActive(show);
         }
     }
 }

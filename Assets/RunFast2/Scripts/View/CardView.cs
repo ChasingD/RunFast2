@@ -75,8 +75,15 @@ namespace RunFast2.Scripts.View
         // Helpers
         string GetRankString(CardRank rank)
         {
-            if (rank <= CardRank.Ten) return ((int)rank).ToString();
-            return rank.ToString()[0].ToString(); // J, Q, K, A, 2
+            switch (rank)
+            {
+                case CardRank.Ace: return "A";
+                case CardRank.Two: return "2";
+                case CardRank.Jack: return "J";
+                case CardRank.Queen: return "Q";
+                case CardRank.King: return "K";
+                default: return ((int)rank).ToString();
+            }
         }
 
         string GetSuitSymbol(CardSuit suit)

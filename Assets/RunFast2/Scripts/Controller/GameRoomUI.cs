@@ -3,6 +3,7 @@ using RunFast2.Scripts.Network;
 using RunFast2.Scripts.View;
 using UnityEngine;
 using UnityEngine.UI;
+using RunFast2.Scripts.Model;
 
 namespace RunFast2.Scripts.Controller
 {
@@ -20,14 +21,23 @@ namespace RunFast2.Scripts.Controller
             // 订阅 CardPlayer 的静态事件
             CardPlayer.OnPlayerInfoUpdated += HandlePlayerUpdate;
             CardPlayer.OnPlayerLeft += HandlePlayerLeft;
+            
+            // 订阅出牌事件
+            CardPlayer.OnOpponentPlayed += HandlePlayerPlayed;
+            CardPlayer.OnOpponentPassed += HandlePlayerPassed;
+            CardPlayer.OnRobResult += HandleRobResult;
+            PokerManager.OnTurnChangedEvent += HandleTurnChanged;
+            PokerManager.OnStateChangedEvent += HandleStateChanged;
         
             // 绑定椅子点击事件
-            foreach(var seat in Seats)
+            for (int i = 0; i < Seats.Length; i++)
             {
-                seat.OnSitClicked = OnSeatClicked; // 委托绑定
+                // 修正：将 SeatView 自身的 SeatID 传递出去
+                // SeatView 的 SeatID 应该在 Inspector 中手动设置为 0, 1, 2，代表 UI 的绝对位置
+                Seats[i].OnSitClicked = OnSeatClicked; 
             }
         
-            ReadyButton.onClick.AddListener(OnReadyClicked);
+            if (ReadyButton) ReadyButton.onClick.AddListener(OnReadyClicked);
             UpdateReadyButtonState();
         }
 
@@ -35,22 +45,72 @@ namespace RunFast2.Scripts.Controller
         {
             CardPlayer.OnPlayerInfoUpdated -= HandlePlayerUpdate;
             CardPlayer.OnPlayerLeft -= HandlePlayerLeft;
+            
+            CardPlayer.OnOpponentPlayed -= HandlePlayerPlayed;
+            CardPlayer.OnOpponentPassed -= HandlePlayerPassed;
+            CardPlayer.OnRobResult -= HandleRobResult;
+            PokerManager.OnTurnChangedEvent -= HandleTurnChanged;
+            PokerManager.OnStateChangedEvent -= HandleStateChanged;
+        }
+
+        // ================== 辅助方法：座位映射 ==================
+
+        /// <summary>
+        /// 将服务器座位号转换为 UI 索引
+        /// </summary>
+        int GetUIIndex(int serverSeatIndex)
+        {
+            if (serverSeatIndex < 0 || serverSeatIndex >= Seats.Length) return -1;
+
+            // 如果游戏未开始，或者我还没坐下，保持绝对视角
+            if (PokerManager.Instance == null || 
+                PokerManager.Instance.CurrentState == GameState.Waiting ||
+                _myCurrentSeat == -1)
+            {
+                return serverSeatIndex;
+            }
+
+            // 游戏开始后，切换到相对视角
+            int totalSeats = Seats.Length;
+            return (serverSeatIndex - _myCurrentSeat + totalSeats) % totalSeats;
+        }
+
+        /// <summary>
+        /// 将 UI 索引转换为服务器座位号
+        /// </summary>
+        int GetServerSeatIndex(int uiIndex)
+        {
+            if (uiIndex < 0 || uiIndex >= Seats.Length) return -1;
+
+            // 如果游戏未开始，或者我还没坐下，保持绝对视角
+            if (PokerManager.Instance == null || 
+                PokerManager.Instance.CurrentState == GameState.Waiting ||
+                _myCurrentSeat == -1)
+            {
+                return uiIndex;
+            }
+
+            // 游戏开始后，切换到相对视角
+            int totalSeats = Seats.Length;
+            return (uiIndex + _myCurrentSeat) % totalSeats;
         }
 
         // ================== 逻辑处理 ==================
 
-        // 1. 当某个座位被点击时
-        void OnSeatClicked(int seatID)
+        // 1. 当某个座位被点击时 (传入的是 UI Index)
+        void OnSeatClicked(int uiIndex)
         {
             // 获取本地玩家对象
             var localPlayer = NetworkClient.localPlayer?.GetComponent<CardPlayer>();
         
-            // 如果我还没坐下，就发送命令坐这个位置
-            if (localPlayer != null && localPlayer.SeatIndex == -1)
+            if (localPlayer != null)
             {
-                // 从全局变量获取名字，传给服务器
+                // 将 UI 索引转换为真实的服务器座位号
+                int targetServerSeat = GetServerSeatIndex(uiIndex);
+
+                // 发送坐下请求
                 string myName = UserSession.CurrentPlayerName;
-                localPlayer.CmdSitDown(seatID, myName);
+                localPlayer.CmdSitDown(targetServerSeat, myName);
             }
         }
 
@@ -67,24 +127,36 @@ namespace RunFast2.Scripts.Controller
         // 3. 核心：处理任何玩家状态更新
         void HandlePlayerUpdate(CardPlayer player)
         {
-            // A. 如果这个玩家坐下了 (SeatIndex 0-2)
-            if (player.SeatIndex >= 0 && player.SeatIndex < Seats.Length)
-            {
-                var seatUI = Seats[player.SeatIndex];
-                seatUI.SetState_Occupied(player.PlayerName, player.IsReady, player.isLocalPlayer);
-            }
-        
-            // B. 如果我是本地玩家，更新我的状态记录
+            // 如果是本地玩家，先更新本地记录
             if (player.isLocalPlayer)
             {
+                bool seatChanged = (_myCurrentSeat != player.SeatIndex);
                 _myCurrentSeat = player.SeatIndex;
                 UpdateReadyButtonState();
-                UpdateAllSeatsInteractable();
+
+                // 如果我的座位变了，需要刷新所有人的位置
+                if (seatChanged)
+                {
+                    RefreshAllSeats();
+                    return; // RefreshAllSeats 会处理所有人的显示，这里直接返回
+                }
             }
-        
-            // C. 处理一种特殊情况：玩家从座位A换到了座位B (虽然跑得快一般不让换，但逻辑要健壮)
-            // 遍历所有座位，如果座位上的人不是当前记录的人，就重置为空
-            RefreshAllSeats();
+
+            // 如果不是本地玩家座位变化，或者本地玩家状态更新（如准备状态），
+            // 只更新单个座位即可，避免不必要的全场刷新
+            if (player.SeatIndex >= 0 && player.SeatIndex < Seats.Length)
+            {
+                int uiIndex = GetUIIndex(player.SeatIndex);
+                if (uiIndex != -1)
+                {
+                    Seats[uiIndex].SetState_Occupied(player.PlayerName, player.IsReady, player.isLocalPlayer, player.RemainingCardCount);
+                }
+            }
+            else
+            {
+                // 玩家站起来了，需要刷新全场来清理他的旧座位
+                RefreshAllSeats();
+            }
         }
     
         // 4. 处理玩家离开（掉线/退出）
@@ -93,12 +165,78 @@ namespace RunFast2.Scripts.Controller
             RefreshAllSeats();
         }
 
+        // 5. 处理出牌显示
+        void HandlePlayerPlayed(int seatIndex, Card[] cards)
+        {
+            int uiIndex = GetUIIndex(seatIndex);
+            Debug.Log($"[GameRoomUI] 收到出牌通知: ServerSeat {seatIndex} -> UISeat {uiIndex}, {cards.Length} 张牌");
+            
+            if (uiIndex >= 0 && uiIndex < Seats.Length)
+            {
+                Seats[uiIndex].ShowPlayedCards(cards);
+            }
+        }
+
+        // 6. 处理过牌显示
+        void HandlePlayerPassed(int seatIndex)
+        {
+            int uiIndex = GetUIIndex(seatIndex);
+            Debug.Log($"[GameRoomUI] 收到过牌通知: ServerSeat {seatIndex} -> UISeat {uiIndex}");
+            
+            if (uiIndex >= 0 && uiIndex < Seats.Length)
+            {
+                Seats[uiIndex].ShowActionText("不要");
+            }
+        }
+
+        // 7. 处理回合切换 (清理新回合玩家的出牌区)
+        void HandleTurnChanged(int currentSeatIndex)
+        {
+            int uiIndex = GetUIIndex(currentSeatIndex);
+            
+            if (uiIndex >= 0 && uiIndex < Seats.Length)
+            {
+                Seats[uiIndex].ClearPlayedCards();
+            }
+        }
+
+        // 8. 处理状态切换 (新的一局开始时清空所有)
+        void HandleStateChanged(GameState newState)
+        {
+            // 游戏开始时，刷新所有座位以切换到相对视角
+            if (newState == GameState.Playing || newState == GameState.Robbing)
+            {
+                RefreshAllSeats();
+            }
+            
+            // 新一局开始，清空所有人的出牌区
+            if (newState == GameState.Playing || newState == GameState.Robbing || newState == GameState.RoundFinished)
+            {
+                foreach (var seat in Seats)
+                {
+                    seat.ClearPlayedCards();
+                }
+            }
+        }
+
+        // 9. 处理抢关结果显示
+        void HandleRobResult(int robberSeatIndex)
+        {
+            if (robberSeatIndex != -1)
+            {
+                int uiIndex = GetUIIndex(robberSeatIndex);
+                if (uiIndex >= 0 && uiIndex < Seats.Length)
+                {
+                    Seats[uiIndex].ShowActionText("抢关成功");
+                }
+            }
+        }
+
         // ================== 辅助方法 ==================
 
         void RefreshAllSeats()
         {
-            // 这是一个暴力但安全的刷新方法：先全重置，再填人
-            // 1. 全部设为空
+            // 1. 先全部清空
             foreach (var seat in Seats) seat.SetState_Empty();
 
             // 2. 找到所有在线玩家填进去
@@ -107,7 +245,11 @@ namespace RunFast2.Scripts.Controller
             {
                 if (p.SeatIndex >= 0 && p.SeatIndex < Seats.Length)
                 {
-                    Seats[p.SeatIndex].SetState_Occupied(p.PlayerName, p.IsReady, p.isLocalPlayer);
+                    int uiIndex = GetUIIndex(p.SeatIndex);
+                    if (uiIndex != -1)
+                    {
+                        Seats[uiIndex].SetState_Occupied(p.PlayerName, p.IsReady, p.isLocalPlayer, p.RemainingCardCount);
+                    }
                 }
             }
         
@@ -117,11 +259,11 @@ namespace RunFast2.Scripts.Controller
         void UpdateReadyButtonState()
         {
             // 只有坐下后，才能看到/点击准备按钮
-            ReadyButton.gameObject.SetActive(_myCurrentSeat != -1);
+            if (ReadyButton) ReadyButton.gameObject.SetActive(_myCurrentSeat != -1);
         
             // 获取本地玩家更新按钮文字（准备/取消）
             var localPlayer = NetworkClient.localPlayer?.GetComponent<CardPlayer>();
-            if (localPlayer != null)
+            if (localPlayer != null && ReadyButton)
             {
                 var text = ReadyButton.GetComponentInChildren<TMPro.TextMeshProUGUI>();
                 if(text) text.text = localPlayer.IsReady ? "取消准备" : "准备";
@@ -130,13 +272,10 @@ namespace RunFast2.Scripts.Controller
 
         void UpdateAllSeatsInteractable()
         {
-            // 如果我已经坐下了，其他空座位的“入座”按钮应该不可点
-            // 如果我没坐下，空座位可点
-            bool canSit = (_myCurrentSeat == -1);
-
+            // 始终允许点击空座位（为了换座位）
             foreach (var seat in Seats)
             {
-                seat.SetInteractable(canSit);
+                seat.SetInteractable(true);
             }
         }
     }

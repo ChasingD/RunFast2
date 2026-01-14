@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Mirror;
+using RunFast2.Scripts.Model;
 using UnityEngine;
 
 namespace RunFast2.Scripts.Network
@@ -18,6 +19,10 @@ namespace RunFast2.Scripts.Network
 
         [SyncVar]
         public string PlayerName = "Unknown";
+
+        // 新增：同步剩余牌数
+        [SyncVar(hook = nameof(OnCardCountChanged))]
+        public int RemainingCardCount = 0;
 
         // ================== 2. 游戏数据 (Gameplay Data) ==================
 
@@ -39,7 +44,15 @@ namespace RunFast2.Scripts.Network
         // 游戏事件 (RPC收到时触发)
         public static event Action<int, Card[]> OnOpponentPlayed; // 座位号, 牌
         public static event Action<int> OnOpponentPassed;
-        public static event Action<int> OnGameWin;
+        public static event Action<int> OnGameWin; // (旧) 简单获胜通知，可保留兼容
+        
+        // 结算事件
+        public static event Action<RoundResult> OnRoundFinished;
+        public static event Action<GameTotalResult> OnGameFinished;
+
+        // 抢关事件
+        public static event Action<bool> OnShowRobUI; // true=show, false=hide
+        public static event Action<int> OnRobResult; // seatIndex of robber, or -1 if none
 
         // ================== 4. 生命周期 (Lifecycle) ==================
 
@@ -47,6 +60,19 @@ namespace RunFast2.Scripts.Network
         {
             base.OnStartClient();
             OnPlayerInfoUpdated?.Invoke(this);
+        }
+
+        public override void OnStartLocalPlayer()
+        {
+            base.OnStartLocalPlayer();
+            // 断线重连检查：如果游戏正在进行中，请求同步状态
+            if (PokerManager.Instance != null && 
+                (PokerManager.Instance.CurrentState == GameState.Playing || 
+                 PokerManager.Instance.CurrentState == GameState.Robbing))
+            {
+                Debug.Log("[Reconnection] 游戏进行中，请求同步状态...");
+                CmdRequestGameState();
+            }
         }
 
         public override void OnStopClient()
@@ -60,19 +86,37 @@ namespace RunFast2.Scripts.Network
         [Command]
         public void CmdSitDown(int seatID, string name)
         {
+            // 1. 检查目标座位是否被占用
             foreach (var p in FindObjectsOfType<CardPlayer>())
             {
-                if (p.SeatIndex == seatID) return; 
+                if (p.SeatIndex == seatID) 
+                {
+                    Debug.LogWarning($"座位 {seatID} 已经被占用了。");
+                    return; 
+                }
             }
 
+            // 2. 如果玩家已经在其他座位上，先离开旧座位（逻辑上不需要额外操作，直接覆盖 SeatIndex 即可）
+            // 但为了清晰，可以打印日志
+            if (this.SeatIndex != -1)
+            {
+                Debug.Log($"玩家 {PlayerName} 从座位 {this.SeatIndex} 换到了 {seatID}");
+            }
+
+            // 3. 更新座位和名字
             this.SeatIndex = seatID;
     
+            // 如果名字为空（未登录），使用 netId 作为名字
             if (string.IsNullOrEmpty(name))
                 this.PlayerName = $"Player {netId}";
             else
                 this.PlayerName = name; 
 
-            this.IsReady = false; 
+            // 4. 修改逻辑：坐下即准备
+            this.IsReady = true; 
+            
+            // 5. 检查是否所有人都准备好了
+            CheckAllReady();
         }
 
         [Command]
@@ -101,6 +145,43 @@ namespace RunFast2.Scripts.Network
             }
         }
 
+        [Command]
+        public void CmdRobPass(bool wantToRob)
+        {
+            if (PokerManager.Instance != null)
+            {
+                PokerManager.Instance.OnPlayerRob(this, wantToRob);
+            }
+        }
+
+        [Command]
+        public void CmdRequestGameState()
+        {
+            // 重新发送手牌
+            if (ServerHand.Count > 0)
+            {
+                TargetRpcReceiveHand(connectionToClient, ServerHand.ToArray());
+            }
+
+            // 重新发送当前牌桌状态 (LastHand)
+            if (PokerManager.Instance != null && PokerManager.Instance.LastHand != null)
+            {
+                // 模拟一次出牌通知，让客户端显示上一手牌
+                // 注意：这里需要把 PokerHand 转回 Card[] 和 type
+                // 并且发送者是 LastPlayerSeatIndex
+                TargetRpcSyncTableState(connectionToClient, 
+                    PokerManager.Instance.LastPlayerSeatIndex, 
+                    PokerManager.Instance.LastHand.Cards.ToArray(), 
+                    (int)PokerManager.Instance.LastHand.Type);
+            }
+
+            // 如果是抢关阶段，重新显示 UI
+            if (PokerManager.Instance != null && PokerManager.Instance.CurrentState == GameState.Robbing)
+            {
+                TargetRpcShowRobUI(connectionToClient);
+            }
+        }
+
         // ================== 6. 服务器逻辑 (Server Logic) ==================
 
         [Server]
@@ -124,7 +205,7 @@ namespace RunFast2.Scripts.Network
                 Debug.Log("所有玩家准备完毕，请求 PokerManager 发牌...");
                 if (PokerManager.Instance != null)
                 {
-                    PokerManager.Instance.StartGame();
+                    PokerManager.Instance.InitializeGame((NetworkManager.singleton as RunFastNetworkManager)!.PendingRoomSettings);
                 }
                 else
                 {
@@ -138,22 +219,69 @@ namespace RunFast2.Scripts.Network
         [TargetRpc]
         public void TargetRpcReceiveHand(NetworkConnection target, Card[] newCards)
         {
+            // 1. 原有逻辑：接收并整理手牌
             MyHand.Clear();
             MyHand.AddRange(newCards);
             SortHand();
             Debug.Log($"我是玩家 {netId} (座位 {SeatIndex}), 收到了 {MyHand.Count} 张牌。");
+
+            // --- 【新增修复代码】强制重置客户端的牌桌状态 ---
+            if (PokerManager.Instance != null)
+            {
+                // 只有在非重连（新开局）时才重置，或者由 PokerManager 状态决定
+                // 这里简单处理：如果收到了新手牌，通常意味着新的一局或者重连恢复
+                // 如果是重连，后面会有 SyncTableState 来覆盖
+                PokerManager.Instance.LastHand = null;       
+                PokerManager.Instance.LastPlayerSeatIndex = -1; 
+            }
+            // -------------------------------------------
+
             OnHandReceived?.Invoke();
+        }
+
+        [TargetRpc]
+        public void TargetRpcSyncTableState(NetworkConnection target, int lastSeatIndex, Card[] lastCards, int lastHandType)
+        {
+            // 专门用于重连同步牌桌状态
+            if (PokerManager.Instance != null)
+            {
+                var newHand = new PokerHand((HandType)lastHandType, 0, new List<Card>(lastCards));
+                PokerManager.Instance.LastHand = newHand;
+                PokerManager.Instance.LastPlayerSeatIndex = lastSeatIndex;
+                
+                // 触发 UI 更新 (显示上一手牌)
+                OnOpponentPlayed?.Invoke(lastSeatIndex, lastCards);
+            }
+        }
+
+        [TargetRpc]
+        public void TargetRpcShowRobUI(NetworkConnection target)
+        {
+            OnShowRobUI?.Invoke(true);
         }
 
         [ClientRpc]
         public void RpcOnPlayerPlayed(int seatIndex, Card[] cards, int handType)
         {
-            // 如果是自己出的牌，因为本地预测/UI更新可能已经移除，这里确认同步
-            // 如果是别人出的牌，UI显示动画
             Debug.Log($"玩家 {seatIndex} 出牌: {cards.Length} 张");
             OnOpponentPlayed?.Invoke(seatIndex, cards);
 
-            // 如果是自己，需要确认本地手牌被扣除 (如果本地尚未扣除)
+            // --- 【新增修复代码 开始】 ---
+            // 客户端收到出牌消息时，手动更新本地 PokerManager 的状态
+            if (PokerManager.Instance != null)
+            {
+                // 1. 转换数据类型 (需引用 RunFast2.Scripts.Model)
+                var newHand = new PokerHand((HandType)handType, 0, new List<Card>(cards)); 
+                // 注意：这里 Weight 暂时填 0，因为客户端不进行校验，只用于记录显示
+                // 如果需要严格逻辑，建议把 CalculateWeight 逻辑搬到客户端通用类里
+
+                PokerManager.Instance.LastHand = newHand;
+                PokerManager.Instance.LastPlayerSeatIndex = seatIndex;
+        
+                Debug.Log($"[Client] 更新上一手牌归属: 座位 {seatIndex}");
+            }
+            // --- 【新增修复代码 结束】 ---
+
             if (SeatIndex == seatIndex && isLocalPlayer)
             {
                 RemoveCardsFromLocalHand(cards);
@@ -170,8 +298,47 @@ namespace RunFast2.Scripts.Network
         [ClientRpc]
         public void RpcGameFinished(int winnerSeat)
         {
+            // 旧的简单通知，保留兼容
             Debug.Log($"游戏结束，赢家: {winnerSeat}");
             OnGameWin?.Invoke(winnerSeat);
+        }
+
+        [ClientRpc]
+        public void RpcOnRoundFinished(RoundResult result)
+        {
+            Debug.Log($"[Client] 本局结束，结算数据收到。");
+            OnRoundFinished?.Invoke(result);
+        }
+
+        [ClientRpc]
+        public void RpcOnGameFinished(GameTotalResult result)
+        {
+            Debug.Log($"[Client] 整场游戏结束，总结算数据收到。");
+            OnGameFinished?.Invoke(result);
+        }
+
+        [ClientRpc]
+        public void RpcShowRobUI()
+        {
+            if (isLocalPlayer)
+            {
+                OnShowRobUI?.Invoke(true);
+            }
+        }
+
+        [ClientRpc]
+        public void RpcHideRobUI()
+        {
+            if (isLocalPlayer)
+            {
+                OnShowRobUI?.Invoke(false);
+            }
+        }
+
+        [ClientRpc]
+        public void RpcOnRobResult(int robberSeatIndex)
+        {
+            OnRobResult?.Invoke(robberSeatIndex);
         }
 
         // ================== 8. 辅助方法 & Hooks ==================
@@ -207,6 +374,12 @@ namespace RunFast2.Scripts.Network
         void OnSeatChanged(int oldVal, int newVal)
         {
             SeatIndex = newVal;
+            OnPlayerInfoUpdated?.Invoke(this);
+        }
+        
+        void OnCardCountChanged(int oldVal, int newVal)
+        {
+            RemainingCardCount = newVal;
             OnPlayerInfoUpdated?.Invoke(this);
         }
 
