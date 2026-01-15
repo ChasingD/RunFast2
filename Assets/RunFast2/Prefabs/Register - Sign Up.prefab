@@ -330,6 +330,18 @@ PrefabInstance:
       propertyPath: m_Name
       value: InputFields
       objectReference: {fileID: 0}
+    - target: {fileID: 6471656418100104038, guid: 4c314a68e096a41398c069b4010d7b3c, type: 3}
+      propertyPath: m_text
+      value: "\u5BC6\u7801"
+      objectReference: {fileID: 0}
+    - target: {fileID: 6517290853936396503, guid: 4c314a68e096a41398c069b4010d7b3c, type: 3}
+      propertyPath: m_text
+      value: "\u90AE\u7BB1"
+      objectReference: {fileID: 0}
+    - target: {fileID: 6649083877147334999, guid: 4c314a68e096a41398c069b4010d7b3c, type: 3}
+      propertyPath: m_text
+      value: "\u7528\u6237\u540D"
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects:
@@ -693,7 +705,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: 1345239700985742471, guid: c2de0605e80bf4d5ab6cf8ffb6b6e072, type: 3}
       propertyPath: m_text
-      value: Sign Up
+      value: "\u6CE8\u518C"
       objectReference: {fileID: 0}
     - target: {fileID: 2864486697453313632, guid: c2de0605e80bf4d5ab6cf8ffb6b6e072, type: 3}
       propertyPath: m_Pivot.x
@@ -842,7 +854,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5272841521160059458, guid: 98f54b365dae841e88609187deaffe8c, type: 3}
       propertyPath: m_text
-      value: Sign Up
+      value: "\u6CE8\u518C"
       objectReference: {fileID: 0}
     - target: {fileID: 5413129590810715060, guid: 98f54b365dae841e88609187deaffe8c, type: 3}
       propertyPath: m_Pivot.x
@@ -1040,7 +1052,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6856626796520286690, guid: 51b10c5779fe14b46ac78c45304ec4e0, type: 3}
       propertyPath: m_text
-      value: Password
+      value: "\u518D\u8F93\u4E00\u6B21"
       objectReference: {fileID: 0}
     - target: {fileID: 6856626796520286690, guid: 51b10c5779fe14b46ac78c45304ec4e0, type: 3}
       propertyPath: m_HorizontalAlignment
