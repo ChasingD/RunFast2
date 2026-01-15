@@ -4,6 +4,7 @@ using RunFast2.Scripts.View;
 using UnityEngine;
 using UnityEngine.UI;
 using RunFast2.Scripts.Model;
+using System.Linq;
 
 namespace RunFast2.Scripts.Controller
 {
@@ -15,12 +16,14 @@ namespace RunFast2.Scripts.Controller
         // public Button StartGameButton; // (可选) 只有房主可见的开始按钮
 
         private int _myCurrentSeat = -1; // 记录本地玩家坐在哪
+        private PlayerTotalStats[] _lastStats; // 缓存上一次的分数
 
         void OnEnable()
         {
             // 订阅 CardPlayer 的静态事件
             CardPlayer.OnPlayerInfoUpdated += HandlePlayerUpdate;
             CardPlayer.OnPlayerLeft += HandlePlayerLeft;
+            CardPlayer.OnScoreUpdated += HandleScoreUpdate; // 订阅分数更新事件
             
             // 订阅出牌事件
             CardPlayer.OnOpponentPlayed += HandlePlayerPlayed;
@@ -45,12 +48,69 @@ namespace RunFast2.Scripts.Controller
         {
             CardPlayer.OnPlayerInfoUpdated -= HandlePlayerUpdate;
             CardPlayer.OnPlayerLeft -= HandlePlayerLeft;
+            CardPlayer.OnScoreUpdated -= HandleScoreUpdate; // 取消订阅
             
             CardPlayer.OnOpponentPlayed -= HandlePlayerPlayed;
             CardPlayer.OnOpponentPassed -= HandlePlayerPassed;
             CardPlayer.OnRobResult -= HandleRobResult;
             PokerManager.OnTurnChangedEvent -= HandleTurnChanged;
             PokerManager.OnStateChangedEvent -= HandleStateChanged;
+        }
+
+        private void Update()
+        {
+            // 更新倒计时
+            UpdateTurnTimer();
+        }
+
+        void UpdateTurnTimer()
+        {
+            if (PokerManager.Instance == null) return;
+
+            // 只有在 Playing 或 Robbing 状态下才更新
+            if (PokerManager.Instance.CurrentState != GameState.Playing && 
+                PokerManager.Instance.CurrentState != GameState.Robbing)
+            {
+                // 隐藏所有倒计时
+                foreach (var seat in Seats) seat.SetActiveState(false);
+                return;
+            }
+
+            double endTime = PokerManager.Instance.TurnEndTime;
+            double remaining = (float)(endTime - NetworkTime.time);
+            
+            // 找到当前行动的玩家
+            int currentPlayerServerIndex = PokerManager.Instance.CurrentPlayerIndex;
+            
+            // 如果是抢关阶段，可能没有 CurrentPlayerIndex (如果是大家一起抢)，或者有特定的 RobberSeatIndex
+            // 但根据 PokerManager 逻辑，Robbing 阶段 CurrentPlayerIndex 是 -1，大家一起抢
+            // 如果是大家一起抢，那么每个人都应该显示倒计时？或者只显示自己的？
+            // 之前的逻辑是 HandViewController 显示自己的。
+            // 这里我们只处理 Playing 阶段的轮流出牌倒计时。
+            
+            if (PokerManager.Instance.CurrentState == GameState.Playing)
+            {
+                if (currentPlayerServerIndex != -1)
+                {
+                    int uiIndex = GetUIIndex(currentPlayerServerIndex);
+                    
+                    // 更新所有座位的状态
+                    for (int i = 0; i < Seats.Length; i++)
+                    {
+                        bool isActive = (i == uiIndex);
+                        Seats[i].SetActiveState(isActive);
+                        if (isActive)
+                        {
+                            Seats[i].UpdateTimer((float)remaining);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Robbing 阶段，暂时隐藏座位上的倒计时，使用 HandViewController 的中央倒计时
+                foreach (var seat in Seats) seat.SetActiveState(false);
+            }
         }
 
         // ================== 辅助方法：座位映射 ==================
@@ -149,7 +209,17 @@ namespace RunFast2.Scripts.Controller
                 int uiIndex = GetUIIndex(player.SeatIndex);
                 if (uiIndex != -1)
                 {
-                    Seats[uiIndex].SetState_Occupied(player.PlayerName, player.IsReady, player.isLocalPlayer, player.RemainingCardCount);
+                    // 尝试从缓存中获取分数
+                    int score = 0;
+                    if (_lastStats != null)
+                    {
+                        var stats = _lastStats.FirstOrDefault(s => s.SeatIndex == player.SeatIndex);
+                        if (!stats.Equals(default(PlayerTotalStats)))
+                        {
+                            score = stats.TotalScore;
+                        }
+                    }
+                    Seats[uiIndex].SetState_Occupied(player.PlayerName, player.IsReady, player.isLocalPlayer, player.RemainingCardCount, score);
                 }
             }
             else
@@ -198,6 +268,9 @@ namespace RunFast2.Scripts.Controller
             {
                 Seats[uiIndex].ClearPlayedCards();
             }
+            
+            // 触发一次倒计时更新
+            UpdateTurnTimer();
         }
 
         // 8. 处理状态切换 (新的一局开始时清空所有)
@@ -217,6 +290,15 @@ namespace RunFast2.Scripts.Controller
                     seat.ClearPlayedCards();
                 }
             }
+            
+            // 游戏开始后，隐藏所有 ReadyIcon
+            if (newState == GameState.Playing || newState == GameState.Robbing)
+            {
+                foreach (var seat in Seats)
+                {
+                    if (seat.ReadyIcon) seat.ReadyIcon.gameObject.SetActive(false);
+                }
+            }
         }
 
         // 9. 处理抢关结果显示
@@ -230,6 +312,30 @@ namespace RunFast2.Scripts.Controller
                     Seats[uiIndex].ShowActionText("抢关成功");
                 }
             }
+        }
+
+        // 10. 处理分数更新
+        void HandleScoreUpdate(PlayerTotalStats[] newStats)
+        {
+            foreach (var stat in newStats)
+            {
+                int uiIndex = GetUIIndex(stat.SeatIndex);
+                if (uiIndex >= 0 && uiIndex < Seats.Length)
+                {
+                    int oldScore = 0;
+                    if (_lastStats != null)
+                    {
+                        var oldStat = _lastStats.FirstOrDefault(s => s.SeatIndex == stat.SeatIndex);
+                        if (!oldStat.Equals(default(PlayerTotalStats)))
+                        {
+                            oldScore = oldStat.TotalScore;
+                        }
+                    }
+                    
+                    Seats[uiIndex].UpdateScore(stat.TotalScore, stat.TotalScore - oldScore);
+                }
+            }
+            _lastStats = newStats; // 更新缓存
         }
 
         // ================== 辅助方法 ==================
@@ -248,7 +354,17 @@ namespace RunFast2.Scripts.Controller
                     int uiIndex = GetUIIndex(p.SeatIndex);
                     if (uiIndex != -1)
                     {
-                        Seats[uiIndex].SetState_Occupied(p.PlayerName, p.IsReady, p.isLocalPlayer, p.RemainingCardCount);
+                        int score = 0;
+                        if (_lastStats != null)
+                        {
+                            var stats = _lastStats.FirstOrDefault(s => s.SeatIndex == p.SeatIndex);
+                            if (!stats.Equals(default(PlayerTotalStats))) score = stats.TotalScore;
+                        }
+                        
+                        // 只有在 Waiting 状态下才显示 ReadyIcon
+                        bool showReady = p.IsReady && (PokerManager.Instance == null || PokerManager.Instance.CurrentState == GameState.Waiting);
+                        
+                        Seats[uiIndex].SetState_Occupied(p.PlayerName, showReady, p.isLocalPlayer, p.RemainingCardCount, score);
                     }
                 }
             }

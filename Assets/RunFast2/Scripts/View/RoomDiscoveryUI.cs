@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Linq;
 using Mirror;
 using Mirror.Discovery;
 using UnityEngine;
@@ -8,25 +9,34 @@ namespace RunFast2.Scripts.View
 {
     public class RoomDiscoveryUI : MonoBehaviour
     {
+        // 内部类，用于存储服务器信息和最后发现时间
+        private class DiscoveredServerInfo
+        {
+            public ServerResponse Response;
+            public float LastSeenTime;
+            public RoomItemView UiItem;
+        }
+
         [Header("References")]
         public NetworkDiscovery networkDiscovery; // 拖入场景中的 NetworkDiscovery 组件
         public Transform ContentRoot;             // ScrollView 的 Content
         public GameObject RoomItemPrefab;         // RoomItemView 的预制体
         public Button RefreshButton;              // 刷新按钮
         public Button JoinButton;                 // 加入按钮
-        public Button CloseButton;                // 关闭按钮
+        // public Button CloseButton;                // 关闭按钮
+
+        [Header("Settings")]
+        public float ServerTimeout = 5f; // 超过5秒未收到广播则认为服务器已消失
 
         // 缓存已发现的服务器
-        private Dictionary<long, ServerResponse> discoveredServers = new Dictionary<long, ServerResponse>();
-        private List<RoomItemView> currentItems = new List<RoomItemView>();
-        
+        private readonly Dictionary<long, DiscoveredServerInfo> _discoveredServers = new Dictionary<long, DiscoveredServerInfo>();
         private RoomItemView _selectedRoom;
 
         private void Start()
         {
             if (RefreshButton) RefreshButton.onClick.AddListener(StartSearch);
             if (JoinButton) JoinButton.onClick.AddListener(OnJoinClicked);
-            if (CloseButton) CloseButton.onClick.AddListener(() => gameObject.SetActive(false));
+            // if (CloseButton) CloseButton.onClick.AddListener(() => gameObject.SetActive(false));
 
             // 自动查找 NetworkDiscovery
             if (networkDiscovery == null)
@@ -41,6 +51,8 @@ namespace RunFast2.Scripts.View
             }
             
             UpdateJoinButtonState();
+
+            StartSearch();
         }
 
         private void OnEnable()
@@ -49,12 +61,17 @@ namespace RunFast2.Scripts.View
             StartSearch();
         }
 
+        private void Update()
+        {
+            // 定期检查超时的服务器
+            CheckForTimedOutServers();
+        }
+
         public void StartSearch()
         {
             if (networkDiscovery == null) return;
 
             // 清空旧数据
-            discoveredServers.Clear();
             ClearList();
             _selectedRoom = null;
             UpdateJoinButtonState();
@@ -68,23 +85,69 @@ namespace RunFast2.Scripts.View
 
         void OnDiscoveredServer(ServerResponse info)
         {
-            // 如果已经包含该服务器，则忽略
-            if (discoveredServers.ContainsKey(info.serverId)) return;
-
-            discoveredServers[info.serverId] = info;
-            AddRoomItem(info);
+            // 如果已经包含该服务器，则只更新时间戳
+            if (_discoveredServers.ContainsKey(info.serverId))
+            {
+                _discoveredServers[info.serverId].LastSeenTime = Time.time;
+            }
+            else // 否则，这是一个新服务器
+            {
+                var newServerInfo = new DiscoveredServerInfo
+                {
+                    Response = info,
+                    LastSeenTime = Time.time,
+                    UiItem = CreateRoomItem(info)
+                };
+                _discoveredServers[info.serverId] = newServerInfo;
+            }
         }
 
-        void AddRoomItem(ServerResponse info)
+        RoomItemView CreateRoomItem(ServerResponse info)
         {
-            if (RoomItemPrefab == null || ContentRoot == null) return;
+            if (RoomItemPrefab == null || ContentRoot == null) return null;
 
             GameObject go = Instantiate(RoomItemPrefab, ContentRoot);
+            go.SetActive(true);
             RoomItemView view = go.GetComponent<RoomItemView>();
             if (view != null)
             {
                 view.Initialize(info, OnRoomSelected);
-                currentItems.Add(view);
+            }
+            return view;
+        }
+
+        void CheckForTimedOutServers()
+        {
+            // 使用 ToList() 创建一个副本进行遍历，因为我们可能会在循环中修改字典
+            foreach (var server in _discoveredServers.Values.ToList())
+            {
+                if (Time.time - server.LastSeenTime > ServerTimeout)
+                {
+                    // 服务器超时，移除
+                    RemoveServer(server.Response.serverId);
+                }
+            }
+        }
+
+        void RemoveServer(long serverId)
+        {
+            if (_discoveredServers.TryGetValue(serverId, out var serverInfo))
+            {
+                // 如果被移除的房间是当前选中的，则取消选中
+                if (_selectedRoom != null && _selectedRoom == serverInfo.UiItem)
+                {
+                    _selectedRoom = null;
+                    UpdateJoinButtonState();
+                }
+
+                // 销毁 UI 对象
+                if (serverInfo.UiItem != null)
+                {
+                    Destroy(serverInfo.UiItem.gameObject);
+                }
+
+                // 从字典中移除
+                _discoveredServers.Remove(serverId);
             }
         }
 
@@ -94,9 +157,12 @@ namespace RunFast2.Scripts.View
             _selectedRoom = selectedView;
 
             // 更新所有 Item 的视觉效果
-            foreach (var item in currentItems)
+            foreach (var item in _discoveredServers.Values)
             {
-                item.SetSelected(item == selectedView);
+                if (item.UiItem != null)
+                {
+                    item.UiItem.SetSelected(item.UiItem == selectedView);
+                }
             }
             
             UpdateJoinButtonState();
@@ -105,6 +171,15 @@ namespace RunFast2.Scripts.View
         void OnJoinClicked()
         {
             if (_selectedRoom == null) return;
+
+            // 再次检查房间是否有效 (防止在点击瞬间房间刚好超时被移除)
+            if (!_discoveredServers.ContainsKey(_selectedRoom.Info.serverId))
+            {
+                DialogManager.Instance.ShowInfo("提示", "该房间已不存在或已关闭。");
+                // 刷新列表
+                StartSearch();
+                return;
+            }
 
             // 停止搜索
             if (networkDiscovery != null) networkDiscovery.StopDiscovery();
@@ -126,11 +201,14 @@ namespace RunFast2.Scripts.View
 
         void ClearList()
         {
-            foreach (var item in currentItems)
+            foreach (var server in _discoveredServers.Values)
             {
-                Destroy(item.gameObject);
+                if (server.UiItem != null)
+                {
+                    Destroy(server.UiItem.gameObject);
+                }
             }
-            currentItems.Clear();
+            _discoveredServers.Clear();
         }
     }
 }

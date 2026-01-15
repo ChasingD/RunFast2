@@ -3,6 +3,10 @@ using System.Collections.Generic;
 using Mirror;
 using RunFast2.Scripts.Model;
 using UnityEngine;
+using RunFast2.Scripts.Services; // 引用 AuthService
+using Cysharp.Threading.Tasks; // 引用 UniTask
+using System.Linq; // 引用 Linq
+using RunFast2.Scripts.Logic; // 引用 PokerRules
 
 namespace RunFast2.Scripts.Network
 {
@@ -24,6 +28,10 @@ namespace RunFast2.Scripts.Network
         [SyncVar(hook = nameof(OnCardCountChanged))]
         public int RemainingCardCount = 0;
 
+        // 新增：托管状态
+        [SyncVar(hook = nameof(OnAutoPlayChanged))]
+        public bool IsAutoPlay = false;
+
         // ================== 2. 游戏数据 (Gameplay Data) ==================
 
         // 客户端本地手牌
@@ -39,7 +47,8 @@ namespace RunFast2.Scripts.Network
         public static event Action<CardPlayer> OnPlayerLeft;
     
         // 收到手牌事件
-        public event Action OnHandReceived; 
+        public event Action OnInitialHandReceived; // 仅在发牌时触发 (播放动画)
+        public event Action OnHandUpdated;         // 手牌变动时触发 (仅刷新)
 
         // 游戏事件 (RPC收到时触发)
         public static event Action<int, Card[]> OnOpponentPlayed; // 座位号, 牌
@@ -49,10 +58,14 @@ namespace RunFast2.Scripts.Network
         // 结算事件
         public static event Action<RoundResult> OnRoundFinished;
         public static event Action<GameTotalResult> OnGameFinished;
+        public static event Action<PlayerTotalStats[]> OnScoreUpdated; // 新增：分数更新事件
 
         // 抢关事件
         public static event Action<bool> OnShowRobUI; // true=show, false=hide
         public static event Action<int> OnRobResult; // seatIndex of robber, or -1 if none
+
+        // 托管事件
+        public static event Action<CardPlayer> OnAutoPlayStateChanged;
 
         // ================== 4. 生命周期 (Lifecycle) ==================
 
@@ -130,6 +143,9 @@ namespace RunFast2.Scripts.Network
         [Command]
         public void CmdPlayCard(Card[] cards)
         {
+            // 手动操作取消托管
+            if (IsAutoPlay) IsAutoPlay = false;
+
             if (PokerManager.Instance != null)
             {
                 PokerManager.Instance.OnPlayerPlayCard(this, cards);
@@ -139,6 +155,9 @@ namespace RunFast2.Scripts.Network
         [Command]
         public void CmdPass()
         {
+            // 手动操作取消托管
+            if (IsAutoPlay) IsAutoPlay = false;
+
             if (PokerManager.Instance != null)
             {
                 PokerManager.Instance.OnPlayerPass(this);
@@ -151,6 +170,17 @@ namespace RunFast2.Scripts.Network
             if (PokerManager.Instance != null)
             {
                 PokerManager.Instance.OnPlayerRob(this, wantToRob);
+            }
+        }
+
+        [Command]
+        public void CmdToggleAutoPlay(bool isAuto)
+        {
+            IsAutoPlay = isAuto;
+            // 如果开启托管且轮到自己，立即尝试出牌
+            if (IsAutoPlay && PokerManager.Instance != null)
+            {
+                PokerManager.Instance.CheckAutoPlay(this);
             }
         }
 
@@ -236,7 +266,8 @@ namespace RunFast2.Scripts.Network
             }
             // -------------------------------------------
 
-            OnHandReceived?.Invoke();
+            // 触发初始发牌事件 (带动画)
+            OnInitialHandReceived?.Invoke();
         }
 
         [TargetRpc]
@@ -263,22 +294,21 @@ namespace RunFast2.Scripts.Network
         [ClientRpc]
         public void RpcOnPlayerPlayed(int seatIndex, Card[] cards, int handType)
         {
-            Debug.Log($"玩家 {seatIndex} 出牌: {cards.Length} 张");
+            // 使用 string.Join 打印出牌详情
+            Debug.Log($"玩家 {seatIndex} 出牌: {cards.Length} 张 {string.Join(", ", cards.Select(c => c.ToString()))}");
             OnOpponentPlayed?.Invoke(seatIndex, cards);
 
             // --- 【新增修复代码 开始】 ---
             // 客户端收到出牌消息时，手动更新本地 PokerManager 的状态
             if (PokerManager.Instance != null)
             {
-                // 1. 转换数据类型 (需引用 RunFast2.Scripts.Model)
-                var newHand = new PokerHand((HandType)handType, 0, new List<Card>(cards)); 
-                // 注意：这里 Weight 暂时填 0，因为客户端不进行校验，只用于记录显示
-                // 如果需要严格逻辑，建议把 CalculateWeight 逻辑搬到客户端通用类里
-
+                // 修正：调用 PokerRules.AnalyzeHand 重新计算权重，避免 Weight=0 的问题
+                var newHand = PokerRules.AnalyzeHand(new List<Card>(cards));
+                
                 PokerManager.Instance.LastHand = newHand;
                 PokerManager.Instance.LastPlayerSeatIndex = seatIndex;
         
-                Debug.Log($"[Client] 更新上一手牌归属: 座位 {seatIndex}");
+                Debug.Log($"[Client] 更新上一手牌归属: 座位 {seatIndex}, 牌型: {newHand}");
             }
             // --- 【新增修复代码 结束】 ---
 
@@ -306,8 +336,15 @@ namespace RunFast2.Scripts.Network
         [ClientRpc]
         public void RpcOnRoundFinished(RoundResult result)
         {
-            Debug.Log($"[Client] 本局结束，结算数据收到。");
-            OnRoundFinished?.Invoke(result);
+            // 移除单局结算弹窗逻辑，只保留日志或调试
+            Debug.Log($"[Client] 本局结束，结算数据收到 (后台处理)。");
+            OnRoundFinished?.Invoke(result); // 恢复触发事件，以便 HandViewController 播放音效
+
+            // 上传单局数据 (仅本地玩家上传自己的)
+            if (isLocalPlayer)
+            {
+                UploadMyRoundRecord(result).Forget();
+            }
         }
 
         [ClientRpc]
@@ -315,6 +352,38 @@ namespace RunFast2.Scripts.Network
         {
             Debug.Log($"[Client] 整场游戏结束，总结算数据收到。");
             OnGameFinished?.Invoke(result);
+        }
+
+        private async UniTaskVoid UploadMyRoundRecord(RoundResult result)
+        {
+            if (AuthService.Instance == null || AuthService.Instance.supabaseManager == null) return;
+            if (!AuthService.Instance.IsLoggedIn) return;
+
+            // 找到自己的记录
+            var myResult = result.PlayerResults.Find(r => r.SeatIndex == SeatIndex);
+            if (myResult.Equals(default(PlayerRoundResult))) return;
+
+            // 构建 GameRecord
+            var record = new GameRecord
+            {
+                UserId = AuthService.Instance.CurrentUser.Id,
+                ScoreChange = myResult.ScoreChange,
+                IsWinner = myResult.IsWinner,
+                IsRobber = myResult.IsRobber,
+                IsRobSuccess = myResult.IsRobSuccess,
+                IsReverseSuccess = false, // 暂未实现反关逻辑
+                BombCount = 0, // 暂未在 PlayerRoundResult 中统计炸弹数，如果需要，需扩展 PlayerRoundResult
+                CreatedAt = DateTime.UtcNow
+            };
+
+            await AuthService.Instance.supabaseManager.UploadGameRecord(record);
+        }
+
+        [ClientRpc]
+        public void RpcUpdateScores(PlayerTotalStats[] stats)
+        {
+            Debug.Log($"[Client] 收到分数更新。");
+            OnScoreUpdated?.Invoke(stats);
         }
 
         [ClientRpc]
@@ -368,7 +437,8 @@ namespace RunFast2.Scripts.Network
                      }
                  }
              }
-             OnHandReceived?.Invoke(); // Refresh UI
+             // 触发手牌更新事件 (无动画)
+             OnHandUpdated?.Invoke(); 
         }
 
         void OnSeatChanged(int oldVal, int newVal)
@@ -387,6 +457,12 @@ namespace RunFast2.Scripts.Network
         {
             IsReady = newVal;
             OnPlayerInfoUpdated?.Invoke(this);
+        }
+
+        void OnAutoPlayChanged(bool oldVal, bool newVal)
+        {
+            IsAutoPlay = newVal;
+            OnAutoPlayStateChanged?.Invoke(this);
         }
     }
 }

@@ -279,18 +279,22 @@ namespace RunFast2.Scripts.Logic
                 {
                     case HandType.Single:
                         var single = groups.FirstOrDefault(g => g.Weight > targetHand.Weight);
-                        if (single.Count > 0) return GetCardsByWeight(myCards, single.Weight, 1);
+                        if (single.Weight > 0) // 结构体默认值 Weight 为 0，如果找到有效值肯定 > 0 (最小牌3权重是3)
+                        {
+                            Debug.Log($"[GetSmallestBeatHand] Found Single: {single.Weight} > {targetHand.Weight}");
+                            return GetCardsByWeight(myCards, single.Weight, 1);
+                        }
                         break;
 
                     case HandType.Pair:
                         var pair = groups.FirstOrDefault(g => g.Count >= 2 && g.Weight > targetHand.Weight);
-                        if (pair.Count > 0) return GetCardsByWeight(myCards, pair.Weight, 2);
+                        if (pair.Weight > 0) return GetCardsByWeight(myCards, pair.Weight, 2);
                         break;
 
                     case HandType.Triplet:
                     case HandType.TripletWithTwo:
                         var triplet = groups.FirstOrDefault(g => g.Count >= 3 && g.Weight > targetHand.Weight);
-                        if (triplet.Count > 0)
+                        if (triplet.Weight > 0)
                         {
                             var result = GetCardsByWeight(myCards, triplet.Weight, 3);
                             // 如果是三带二，还需要找两张散牌
@@ -324,7 +328,7 @@ namespace RunFast2.Scripts.Logic
             else
             {
                 var biggerBomb = myBombs.FirstOrDefault(b => b.Weight > targetHand.Weight);
-                if (biggerBomb.Count > 0) return GetCardsByWeight(myCards, biggerBomb.Weight, 4);
+                if (biggerBomb.Weight > 0) return GetCardsByWeight(myCards, biggerBomb.Weight, 4);
             }
 
             return null;

@@ -39,7 +39,7 @@ namespace RunFast2.Scripts
         /// <param name="buttons">按钮数组 (可选，默认为 Close)</param>
         /// <param name="focusButton">默认聚焦的按钮文本 (可选)</param>
         /// <param name="targetCanvas">指定显示的 Canvas (可选，自动查找)</param>
-        public void ShowDialog(string title, string message, DialogButton[] buttons = null, string focusButton = null, Canvas targetCanvas = null)
+        private void ShowDialog(string title, string message, DialogButton[] buttons = null, string focusButton = null, Canvas targetCanvas = null)
         {
             // 如果没有传入按钮，默认创建一个 Close 按钮
             if (buttons == null || buttons.Length == 0)
@@ -59,7 +59,12 @@ namespace RunFast2.Scripts
             if (targetCanvas == null)
             {
                 // 优先尝试找 Main Canvas，找不到则找任意一个
-                targetCanvas = FindObjectOfType<Canvas>();
+                targetCanvas = DialogSampleTemplate.transform.parent?.GetComponent<Canvas>();
+                
+                if (targetCanvas == null)
+                {
+                    targetCanvas = FindObjectOfType<Canvas>();
+                }
                 
                 if (targetCanvas == null)
                 {
@@ -77,7 +82,8 @@ namespace RunFast2.Scripts
                 message: message,
                 buttons: buttons,
                 focusButton: focusButton,
-                canvas: targetCanvas
+                canvas: targetCanvas,
+                modal:true
             );
         }
 

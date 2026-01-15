@@ -2,6 +2,8 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using TMPro;
+using RunFast2.Scripts.Manager; // 引用 Manager
+using DG.Tweening; // 引入 DOTween
 
 namespace RunFast2.Scripts.View
 {
@@ -9,8 +11,7 @@ namespace RunFast2.Scripts.View
     {
         [Header("UI References")]
         public Image CardImage;       // Background/Sprite
-        public TextMeshProUGUI RankText;
-        public TextMeshProUGUI SuitText;
+        public RectTransform VisualRoot; // 新增：用于位移的子物体
 
         [Header("State")]
         public Card CardData;
@@ -22,11 +23,25 @@ namespace RunFast2.Scripts.View
         private void Awake()
         {
             _rectTransform = GetComponent<RectTransform>();
+            
+            // 如果没有手动赋值 VisualRoot，尝试查找名为 "Visual" 的子物体
+            if (VisualRoot == null)
+            {
+                var visual = transform.Find("Visual");
+                if (visual != null) VisualRoot = visual as RectTransform;
+            }
         }
 
         private void Start()
         {
-            if (_rectTransform != null)
+            // 记录初始 Y 位置
+            // 如果有 VisualRoot，记录 VisualRoot 的本地 Y
+            // 否则记录自身的 anchoredPosition Y (虽然这在 LayoutGroup 下不稳定)
+            if (VisualRoot != null)
+            {
+                _originalY = VisualRoot.localPosition.y;
+            }
+            else if (_rectTransform != null)
             {
                 _originalY = _rectTransform.anchoredPosition.y;
             }
@@ -40,15 +55,18 @@ namespace RunFast2.Scripts.View
 
         void UpdateVisuals()
         {
-            // Simple Text Fallback if no sprites
-            if (RankText != null) RankText.text = GetRankString(CardData.Rank);
-            if (SuitText != null)
+            // 尝试从 Manager 获取 Sprite
+            if (CardAssetManager.Instance != null && CardImage != null)
             {
-                SuitText.text = GetSuitSymbol(CardData.Suit);
-                // Set color
-                Color c = (CardData.Suit == CardSuit.Heart || CardData.Suit == CardSuit.Diamond) ? Color.red : Color.black;
-                SuitText.color = c;
-                if (RankText != null) RankText.color = c;
+                Sprite sprite = CardAssetManager.Instance.GetCardSprite(CardData.Suit, CardData.Rank);
+                if (sprite != null)
+                {
+                    CardImage.sprite = sprite;
+                }
+                else
+                {
+                    Debug.LogWarning($"Sprite not found for {CardData.Suit} {CardData.Rank}");
+                }
             }
 
             // Name for debugging
@@ -64,37 +82,28 @@ namespace RunFast2.Scripts.View
         {
             IsSelected = !IsSelected;
 
-            // Visual Pop Effect
-            if (_rectTransform != null)
-            {
-                float targetY = IsSelected ? _originalY + 20f : _originalY;
-                _rectTransform.anchoredPosition = new Vector2(_rectTransform.anchoredPosition.x, targetY);
-            }
-        }
+            float offset = 30f; // 弹起高度
+            float duration = 0.2f; // 动画时间
 
-        // Helpers
-        string GetRankString(CardRank rank)
-        {
-            switch (rank)
+            if (VisualRoot != null)
             {
-                case CardRank.Ace: return "A";
-                case CardRank.Two: return "2";
-                case CardRank.Jack: return "J";
-                case CardRank.Queen: return "Q";
-                case CardRank.King: return "K";
-                default: return ((int)rank).ToString();
+                // 方案 B：移动子物体 (推荐)
+                // 使用 localPosition，不受 LayoutGroup 影响
+                float targetY = IsSelected ? _originalY + offset : _originalY;
+                
+                // 使用 DOTween 移动
+                VisualRoot.DOLocalMoveY(targetY, duration).SetEase(Ease.OutQuad);
             }
-        }
-
-        string GetSuitSymbol(CardSuit suit)
-        {
-            switch (suit)
+            else if (_rectTransform != null)
             {
-                case CardSuit.Diamond: return "♦";
-                case CardSuit.Club: return "♣";
-                case CardSuit.Heart: return "♥";
-                case CardSuit.Spade: return "♠";
-                default: return "?";
+                // 方案 A (回退)：修改 Pivot (如果不想改 Prefab 结构)
+                // 假设默认 Pivot 是 (0.5, 0.5)
+                // 这种方式比较 hacky，且依赖于 LayoutGroup 的具体设置
+                // _rectTransform.pivot = IsSelected ? new Vector2(0.5f, 0.4f) : new Vector2(0.5f, 0.5f);
+                
+                // 或者继续尝试修改 anchoredPosition，但在 LayoutGroup 下通常会失效或抖动
+                // 建议务必使用 VisualRoot 方案
+                Debug.LogWarning("CardView: Missing VisualRoot. Selection animation might be buggy with LayoutGroup.");
             }
         }
     }

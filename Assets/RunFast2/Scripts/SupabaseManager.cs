@@ -4,6 +4,8 @@ using Supabase;
 using Supabase.Gotrue;
 using UnityEngine;
 using Client = Supabase.Client;
+using Cysharp.Threading.Tasks;
+using RunFast2.Scripts.Model;
 
 namespace RunFast2.Scripts
 {
@@ -108,5 +110,19 @@ namespace RunFast2.Scripts
 				_client = null;
 			}
 		}
+
+        public async UniTask UploadGameRecord(GameRecord record)
+        {
+            if (_client == null) return;
+            try
+            {
+                await _client.From<GameRecord>().Insert(record);
+                Debug.Log("Game record uploaded successfully.");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Failed to upload game record: {ex.Message}");
+            }
+        }
     }
 }

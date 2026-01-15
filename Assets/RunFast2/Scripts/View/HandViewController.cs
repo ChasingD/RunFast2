@@ -9,6 +9,7 @@ using RunFast2.Scripts.Model;
 using TMPro;
 using RunFast2.Scripts.Manager;
 using Cysharp.Threading.Tasks; // 引用 UniTask
+using Ricimi; // 引用 Ricimi
 
 namespace RunFast2.Scripts.View
 {
@@ -21,46 +22,56 @@ namespace RunFast2.Scripts.View
         public Button PlayButton;
         public Button PassButton;
         public GameObject ActionPanel;     // Panel containing Play/Pass buttons
+        public TMP_Text MessageText;       // 新增：提示文本 (如"没有牌能大过上家")
 
         [Header("Timer UI")]
-        public TMP_Text TimerText; // 显示倒计时数字
+        public TMP_Text TimerText; // 显示出牌倒计时数字
+        public TMP_Text RobTimerText; // 显示抢关倒计时数字
 
         [Header("Rob UI")]
         public GameObject RobPanel;
         public Button RobButton;
         public Button NoRobButton;
+        public Slider AutoPlaySlider; // 修改：托管开关 (Slider)
 
-        [Header("Result UI")]
-        public GameObject RoundResultPanel; // 单局结算面板
-        public TMP_Text RoundResultText;        // 显示结算信息
-        public GameObject GameResultPanel;  // 总结算面板
-        public TMP_Text GameResultText;         // 显示总结算信息
-        public Button BackToLobbyButton;    // 返回大厅按钮
+        [Header("Result UI Prefabs")]
+        public GameObject RoundResultPrefab; // 单局结算 Prefab (已废弃，保留兼容)
+        public GameObject GameResultPrefab;  // 总结算 Prefab
+        public GameObject ResultItemPrefab;  // 结算条目 Prefab (如果需要动态生成)
 
         [Header("Runtime State")]
         public List<CardView> CurrentCardViews = new List<CardView>();
         private CardPlayer _localPlayer;
+        private PopupOpener _popupOpener; // 用于打开弹窗
+
+        private void Awake()
+        {
+            // 确保有 PopupOpener 组件，或者动态添加
+            _popupOpener = GetComponent<PopupOpener>();
+            if (_popupOpener == null) _popupOpener = gameObject.AddComponent<PopupOpener>();
+        }
 
         private void Start()
         {
             // Initial State
             if (ActionPanel) ActionPanel.SetActive(false);
             if (RobPanel) RobPanel.SetActive(false);
-            if (RoundResultPanel) RoundResultPanel.SetActive(false);
-            if (GameResultPanel) GameResultPanel.SetActive(false);
             if (TimerText) TimerText.gameObject.SetActive(false);
+            if (RobTimerText) RobTimerText.gameObject.SetActive(false);
+            if (MessageText) MessageText.gameObject.SetActive(false);
 
             if (PlayButton) PlayButton.onClick.AddListener(OnPlayClicked);
             if (PassButton) PassButton.onClick.AddListener(OnPassClicked);
             if (RobButton) RobButton.onClick.AddListener(() => OnRobClicked(true));
             if (NoRobButton) NoRobButton.onClick.AddListener(() => OnRobClicked(false));
-            if (BackToLobbyButton) BackToLobbyButton.onClick.AddListener(OnBackToLobbyClicked);
-
+            if (AutoPlaySlider) AutoPlaySlider.onValueChanged.AddListener(OnAutoPlayToggled);
+            
             // Subscribe to Static Events
             CardPlayer.OnPlayerInfoUpdated += OnPlayerUpdated;
             CardPlayer.OnShowRobUI += OnShowRobUI;
             CardPlayer.OnRoundFinished += OnRoundFinished;
             CardPlayer.OnGameFinished += OnGameFinished;
+            CardPlayer.OnAutoPlayStateChanged += OnAutoPlayStateChanged; // 订阅托管状态变化
             PokerManager.OnTurnChangedEvent += OnTurnChanged;
             PokerManager.OnStateChangedEvent += OnStateChanged;
 
@@ -75,13 +86,15 @@ namespace RunFast2.Scripts.View
             CardPlayer.OnShowRobUI -= OnShowRobUI;
             CardPlayer.OnRoundFinished -= OnRoundFinished;
             CardPlayer.OnGameFinished -= OnGameFinished;
+            CardPlayer.OnAutoPlayStateChanged -= OnAutoPlayStateChanged;
             PokerManager.OnTurnChangedEvent -= OnTurnChanged;
             PokerManager.OnStateChangedEvent -= OnStateChanged;
 
             // Unsubscribe Instance Events
             if (_localPlayer != null)
             {
-                _localPlayer.OnHandReceived -= RefreshHand;
+                _localPlayer.OnInitialHandReceived -= PlayDealAnimation;
+                _localPlayer.OnHandUpdated -= RefreshHand;
             }
         }
 
@@ -97,27 +110,59 @@ namespace RunFast2.Scripts.View
         {
             if (PokerManager.Instance == null || TimerText == null) return;
 
-            // 只有在 Playing 状态且有人出牌时才显示倒计时
-            if (PokerManager.Instance.CurrentState != GameState.Playing)
-            {
-                TimerText.gameObject.SetActive(false);
-                return;
-            }
-
             double endTime = PokerManager.Instance.TurnEndTime;
             double remaining = endTime - NetworkTime.time;
+            string timeStr = remaining > 0 ? Mathf.CeilToInt((float)remaining).ToString() : "0";
+            Color timeColor = remaining <= 5 ? Color.red : Color.white;
 
-            if (remaining > 0)
+            // 1. 出牌倒计时
+            if (PokerManager.Instance.CurrentState == GameState.Playing)
             {
-                TimerText.gameObject.SetActive(true);
-                TimerText.text = Mathf.CeilToInt((float)remaining).ToString();
-                
-                // 变色提醒：最后5秒变红
-                TimerText.color = remaining <= 5 ? Color.red : Color.white;
+                if (TimerText)
+                {
+                    // 只有轮到自己出牌时才显示倒计时 (或者你想一直显示当前回合者的倒计时也可以)
+                    // 这里假设只显示自己的
+                    bool isMyTurn = _localPlayer != null && PokerManager.Instance.CurrentPlayerIndex != -1 && 
+                                    _localPlayer.SeatIndex == FindObjectsOfType<CardPlayer>()
+                                        .Where(p => p.SeatIndex != -1)
+                                        .OrderBy(p => p.SeatIndex)
+                                        .ElementAtOrDefault(PokerManager.Instance.CurrentPlayerIndex)?.SeatIndex;
+
+                    if (isMyTurn && remaining > 0)
+                    {
+                        TimerText.gameObject.SetActive(true);
+                        TimerText.text = timeStr;
+                        TimerText.color = timeColor;
+                    }
+                    else
+                    {
+                        TimerText.gameObject.SetActive(false);
+                    }
+                }
+                if (RobTimerText) RobTimerText.gameObject.SetActive(false);
+            }
+            // 2. 抢关倒计时
+            else if (PokerManager.Instance.CurrentState == GameState.Robbing)
+            {
+                if (RobTimerText)
+                {
+                    if (remaining > 0)
+                    {
+                        RobTimerText.gameObject.SetActive(true);
+                        RobTimerText.text = timeStr;
+                        RobTimerText.color = timeColor;
+                    }
+                    else
+                    {
+                        RobTimerText.gameObject.SetActive(false);
+                    }
+                }
+                if (TimerText) TimerText.gameObject.SetActive(false);
             }
             else
             {
-                TimerText.gameObject.SetActive(false);
+                if (TimerText) TimerText.gameObject.SetActive(false);
+                if (RobTimerText) RobTimerText.gameObject.SetActive(false);
             }
         }
 
@@ -146,7 +191,8 @@ namespace RunFast2.Scripts.View
             // Unsubscribe old
             if (_localPlayer != null)
             {
-                _localPlayer.OnHandReceived -= RefreshHand;
+                _localPlayer.OnInitialHandReceived -= PlayDealAnimation;
+                _localPlayer.OnHandUpdated -= RefreshHand;
             }
 
             _localPlayer = p;
@@ -154,9 +200,13 @@ namespace RunFast2.Scripts.View
             // Subscribe new
             if (_localPlayer != null)
             {
-                _localPlayer.OnHandReceived += RefreshHand;
-                RefreshHand();
+                _localPlayer.OnInitialHandReceived += PlayDealAnimation;
+                _localPlayer.OnHandUpdated += RefreshHand;
+                RefreshHand(); // 初始刷新
                 CheckTurnButtons();
+                
+                // 初始化托管 Slider 状态
+                if (AutoPlaySlider) AutoPlaySlider.value = _localPlayer.IsAutoPlay ? 1 : 0;
             }
         }
 
@@ -175,6 +225,19 @@ namespace RunFast2.Scripts.View
             CheckTurnButtons();
         }
 
+        void OnAutoPlayStateChanged(CardPlayer player)
+        {
+            if (player.isLocalPlayer && AutoPlaySlider != null)
+            {
+                // 避免循环触发
+                float targetValue = player.IsAutoPlay ? 1 : 0;
+                if (Mathf.Abs(AutoPlaySlider.value - targetValue) > 0.1f)
+                {
+                    AutoPlaySlider.SetValueWithoutNotify(targetValue);
+                }
+            }
+        }
+
         void OnTurnChanged(int turnIndex)
         {
             Debug.Log($"[UI] 收到回合切换通知: {turnIndex}");
@@ -187,10 +250,10 @@ namespace RunFast2.Scripts.View
             CheckTurnButtons();
             
             // 如果进入新的一局 (Playing/Robbing)，隐藏结算面板
-            if (newState == GameState.Playing || newState == GameState.Robbing)
-            {
-                if (RoundResultPanel) RoundResultPanel.SetActive(false);
-            }
+            // 注意：现在结算面板是 Popup，它会自动管理关闭，或者我们需要手动关闭
+            // 这里假设 Popup 会在点击继续后关闭，或者新局开始时自动关闭
+            // 如果需要自动关闭，我们需要持有 Popup 的引用，但因为是动态生成的，比较麻烦
+            // 简单做法：让 RoundResultPanel 监听 GameState 变化并自动关闭
         }
 
         void OnShowRobUI(bool show)
@@ -203,22 +266,7 @@ namespace RunFast2.Scripts.View
 
         void OnRoundFinished(RoundResult result)
         {
-            if (RoundResultPanel)
-            {
-                RoundResultPanel.SetActive(true);
-                if (RoundResultText)
-                {
-                    string info = $"第 {result.RoundIndex} 局结算:\n";
-                    foreach (var p in result.PlayerResults)
-                    {
-                        string role = p.IsRobber ? "[抢关]" : "";
-                        string winStr = p.IsWinner ? "(赢)" : "";
-                        info += $"座位{p.SeatIndex} {role}{winStr}: {p.ScoreChange}分 (剩{p.RemainingCardCount}张)\n";
-                    }
-                    RoundResultText.text = info;
-                }
-            }
-            
+            // 移除单局结算弹窗显示逻辑
             // 播放音效
             bool amIWinner = result.PlayerResults.Any(p => p.SeatIndex == _localPlayer.SeatIndex && p.IsWinner);
             if (AudioManager.Instance != null)
@@ -229,28 +277,66 @@ namespace RunFast2.Scripts.View
 
         void OnGameFinished(GameTotalResult result)
         {
-            if (RoundResultPanel) RoundResultPanel.SetActive(false); // 隐藏单局结算
-            if (GameResultPanel)
+            if (GameResultPrefab != null)
             {
-                GameResultPanel.SetActive(true);
-                if (GameResultText)
+                var canvas = GetComponentInParent<Canvas>();
+                if (canvas != null)
                 {
-                    string info = "游戏结束 - 总成绩:\n";
-                    foreach (var score in result.TotalScores)
+                    var popup = Instantiate(GameResultPrefab, canvas.transform);
+                    // 确保 Popup 居中
+                    var rect = popup.GetComponent<RectTransform>();
+                    if (rect) rect.anchoredPosition = Vector2.zero;
+
+                    var panel = popup.GetComponent<GameResultPanel>();
+                    if (panel != null)
                     {
-                        info += $"座位 {score.SeatIndex}: 总分 {score.Score}\n";
+                        panel.Initialize(result);
+                        panel.OnBackToLobbyClicked = OnBackToLobbyClicked;
                     }
-                    GameResultText.text = info;
+                    
+                    // 打开动画
+                    var popupComp = popup.GetComponent<Popup>();
+                    if (popupComp) popupComp.Open();
                 }
             }
         }
 
+        // 仅用于播放发牌动画
+        void PlayDealAnimation()
+        {
+            if (_localPlayer == null) return;
+            AnimateDealCardsAsync().Forget();
+        }
+
+        // 仅用于刷新手牌显示 (无动画)
         void RefreshHand()
         {
             if (_localPlayer == null) return;
 
-            // 使用 UniTask 启动异步方法
-            AnimateDealCardsAsync().Forget();
+            // Clear old views
+            foreach (Transform child in HandContainer)
+            {
+                Destroy(child.gameObject);
+            }
+            CurrentCardViews.Clear();
+
+            if (CardViewPrefab == null)
+            {
+                Debug.LogError("HandViewController: CardViewPrefab is missing!");
+                return;
+            }
+
+            // 直接生成并显示
+            foreach (var card in _localPlayer.MyHand)
+            {
+                GameObject go = Instantiate(CardViewPrefab, HandContainer);
+                CardView view = go.GetComponent<CardView>();
+                if (view != null)
+                {
+                    view.Initialize(card);
+                    CurrentCardViews.Add(view);
+                }
+            }
         }
 
         async UniTaskVoid AnimateDealCardsAsync()
@@ -323,14 +409,9 @@ namespace RunFast2.Scripts.View
                 .OrderBy(p => p.SeatIndex)
                 .ToList();
 
-            // 4. 【关键日志】方便排查
-            // Debug.Log($"[CheckTurn] Index:{currentTurnIndex}, PlayersFound:{seatedPlayers.Count}, MySeat:{mySeatIndex}");
-
             // 5. 数据未同步完成时的容错处理
             if (currentTurnIndex >= seatedPlayers.Count)
             {
-                // 此时说明还没收到所有玩家的数据，暂时隐藏面板，等待 OnPlayerUpdated 再次触发
-                // 不要报错，这是正常的网络延迟现象
                 if (ActionPanel) ActionPanel.SetActive(false);
                 return;
             }
@@ -340,12 +421,14 @@ namespace RunFast2.Scripts.View
             bool isMyTurn = (currentPlayer.SeatIndex == _localPlayer.SeatIndex);
     
             if (ActionPanel) ActionPanel.SetActive(isMyTurn);
+            if (MessageText) MessageText.gameObject.SetActive(false); // 默认隐藏提示
 
             // 2. 核心修改："有出必出" 逻辑控制 Pass 按钮
             if (isMyTurn && PassButton != null)
             {
                 // 默认可以过
                 bool canPass = true;
+                bool hasMove = true; // 默认假设有牌能管
 
                 // A. 如果我是首发 (LastHand 为空，或者是上一轮我自己出的)，那肯定不能过，必须出牌
                 bool isRoundLeader = (PokerManager.Instance.LastPlayerSeatIndex == _localPlayer.SeatIndex)
@@ -364,18 +447,30 @@ namespace RunFast2.Scripts.View
                     if (mustPlayMode)
                     {
                         // 使用刚刚写的 PokerRules 方法检测
-                        bool hasMove = PokerRules.HasHandToBeat(_localPlayer.MyHand, PokerManager.Instance.LastHand);
+                        hasMove = PokerRules.HasHandToBeat(_localPlayer.MyHand, PokerManager.Instance.LastHand);
                 
                         // 如果有牌能管，就不能过 (canPass = false)
                         // 如果没牌能管，才可以过 (canPass = true)
                         if (hasMove)
                         {
                             canPass = false; 
-                            // 这里可以加个UI提示，比如把Pass按钮变灰，文字改成"必须出牌"
+                        }
+                        else
+                        {
+                            // 没牌能管，显示提示
+                            if (MessageText)
+                            {
+                                MessageText.gameObject.SetActive(true);
+                                MessageText.text = "没有牌能大过上家";
+                            }
                         }
                     }
                 }
 
+                // 无论如何，PassButton 始终显示，只是 interactable 状态不同
+                // 或者：如果没牌能管，PassButton 必须启用，让玩家点击过牌
+                // 如果有牌能管且是必出模式，PassButton 禁用
+                
                 PassButton.interactable = canPass;
             }
         }
@@ -466,6 +561,12 @@ namespace RunFast2.Scripts.View
             
             // 播放按钮音效
             if (AudioManager.Instance != null) AudioManager.Instance.PlaySFX(AudioManager.Instance.SFX_Button);
+        }
+
+        void OnAutoPlayToggled(float value)
+        {
+            if (_localPlayer == null) return;
+            _localPlayer.CmdToggleAutoPlay(value > 0.5f); // 阈值判断
         }
 
         void OnBackToLobbyClicked()
