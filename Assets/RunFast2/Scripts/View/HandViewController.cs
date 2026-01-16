@@ -59,6 +59,7 @@ namespace RunFast2.Scripts.View
             if (TimerText) TimerText.gameObject.SetActive(false);
             if (RobTimerText) RobTimerText.gameObject.SetActive(false);
             if (MessageText) MessageText.gameObject.SetActive(false);
+            if (AutoPlaySlider) AutoPlaySlider.gameObject.SetActive(false); // 默认隐藏
 
             if (PlayButton) PlayButton.onClick.AddListener(OnPlayClicked);
             if (PassButton) PassButton.onClick.AddListener(OnPassClicked);
@@ -254,6 +255,13 @@ namespace RunFast2.Scripts.View
             // 这里假设 Popup 会在点击继续后关闭，或者新局开始时自动关闭
             // 如果需要自动关闭，我们需要持有 Popup 的引用，但因为是动态生成的，比较麻烦
             // 简单做法：让 RoundResultPanel 监听 GameState 变化并自动关闭
+
+            // 控制 AutoPlaySlider 的显隐
+            if (AutoPlaySlider != null)
+            {
+                bool show = newState == GameState.Playing || newState == GameState.Robbing;
+                AutoPlaySlider.gameObject.SetActive(show);
+            }
         }
 
         void OnShowRobUI(bool show)

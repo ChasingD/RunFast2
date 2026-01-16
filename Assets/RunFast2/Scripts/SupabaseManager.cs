@@ -25,6 +25,8 @@ namespace RunFast2.Scripts
 
 		private async void Start()
 		{
+			DontDestroyOnLoad(this);
+			
 			SupabaseOptions options = new();
 			// We set an option to refresh the token automatically using a background thread.
 			options.AutoRefreshToken = true;
@@ -113,7 +115,11 @@ namespace RunFast2.Scripts
 
         public async UniTask UploadGameRecord(GameRecord record)
         {
-            if (_client == null) return;
+            if (_client == null) 
+            {
+                Debug.LogError("[SupabaseManager] Client is null, cannot upload record.");
+                return;
+            }
             try
             {
                 await _client.From<GameRecord>().Insert(record);

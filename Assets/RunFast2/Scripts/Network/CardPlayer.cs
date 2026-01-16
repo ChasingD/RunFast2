@@ -67,6 +67,9 @@ namespace RunFast2.Scripts.Network
         // 托管事件
         public static event Action<CardPlayer> OnAutoPlayStateChanged;
 
+        // 道具事件
+        public static event Action<int, int, int> OnItemEffectTriggered; // sourceSeat, targetSeat, itemTypeId
+
         // ================== 4. 生命周期 (Lifecycle) ==================
 
         public override void OnStartClient()
@@ -116,15 +119,15 @@ namespace RunFast2.Scripts.Network
                 Debug.Log($"玩家 {PlayerName} 从座位 {this.SeatIndex} 换到了 {seatID}");
             }
 
-            // 3. 更新座位和名字
-            this.SeatIndex = seatID;
-    
             // 如果名字为空（未登录），使用 netId 作为名字
             if (string.IsNullOrEmpty(name))
                 this.PlayerName = $"Player {netId}";
             else
                 this.PlayerName = name; 
 
+            // 3. 更新座位和名字
+            this.SeatIndex = seatID;
+    
             // 4. 修改逻辑：坐下即准备
             this.IsReady = true; 
             
@@ -182,6 +185,14 @@ namespace RunFast2.Scripts.Network
             {
                 PokerManager.Instance.CheckAutoPlay(this);
             }
+        }
+
+        [Command]
+        public void CmdUseItem(int targetSeatIndex, int itemTypeId)
+        {
+            // TODO: 这里可以添加验证逻辑，比如检查玩家是否有足够的金币或道具数量
+            // 目前直接广播给所有客户端播放特效
+            RpcOnItemUsed(SeatIndex, targetSeatIndex, itemTypeId);
         }
 
         [Command]
@@ -356,12 +367,35 @@ namespace RunFast2.Scripts.Network
 
         private async UniTaskVoid UploadMyRoundRecord(RoundResult result)
         {
-            if (AuthService.Instance == null || AuthService.Instance.supabaseManager == null) return;
-            if (!AuthService.Instance.IsLoggedIn) return;
+            Debug.Log("[Upload] Starting UploadMyRoundRecord...");
+            
+            if (AuthService.Instance == null)
+            {
+                Debug.LogError("[Upload] AuthService.Instance is null");
+                return;
+            }
+            
+            if (AuthService.Instance.supabaseManager == null)
+            {
+                Debug.LogError("[Upload] AuthService.Instance.supabaseManager is null");
+                return;
+            }
+
+            if (!AuthService.Instance.IsLoggedIn)
+            {
+                Debug.LogWarning("[Upload] User is not logged in. Skipping upload.");
+                return;
+            }
 
             // 找到自己的记录
             var myResult = result.PlayerResults.Find(r => r.SeatIndex == SeatIndex);
-            if (myResult.Equals(default(PlayerRoundResult))) return;
+            if (myResult.Equals(default(PlayerRoundResult)))
+            {
+                Debug.LogError($"[Upload] Could not find result for seat {SeatIndex}");
+                return;
+            }
+
+            Debug.Log($"[Upload] Found my result: ScoreChange={myResult.ScoreChange}, IsWinner={myResult.IsWinner}");
 
             // 构建 GameRecord
             var record = new GameRecord
@@ -376,6 +410,7 @@ namespace RunFast2.Scripts.Network
                 CreatedAt = DateTime.UtcNow
             };
 
+            Debug.Log("[Upload] Calling SupabaseManager.UploadGameRecord...");
             await AuthService.Instance.supabaseManager.UploadGameRecord(record);
         }
 
@@ -408,6 +443,13 @@ namespace RunFast2.Scripts.Network
         public void RpcOnRobResult(int robberSeatIndex)
         {
             OnRobResult?.Invoke(robberSeatIndex);
+        }
+
+        [ClientRpc]
+        public void RpcOnItemUsed(int sourceSeat, int targetSeat, int itemTypeId)
+        {
+            Debug.Log($"[Item] Player {sourceSeat} used item {(ItemType)itemTypeId} on Player {targetSeat}");
+            OnItemEffectTriggered?.Invoke(sourceSeat, targetSeat, itemTypeId);
         }
 
         // ================== 8. 辅助方法 & Hooks ==================

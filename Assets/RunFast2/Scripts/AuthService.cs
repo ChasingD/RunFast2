@@ -14,10 +14,10 @@ namespace RunFast2.Scripts.Services
     {
         public static AuthService Instance { get; private set; }
 
-        [Header("Dependencies")]
-        public SupabaseManager supabaseManager; // 在 Inspector 中拖入，或者自动查找
+        [Header("Dependencies")] public SupabaseManager supabaseManager; // 在 Inspector 中拖入，或者自动查找
 
         [SerializeField] private string loginScene = "1Login";
+
         // 公共属性：当前登录的用户信息
         public AppUser CurrentUser { get; private set; }
 
@@ -50,13 +50,37 @@ namespace RunFast2.Scripts.Services
         }
 
         /// <summary>
+        /// 外部设置当前用户 (例如从 SessionListener 恢复会话时调用)
+        /// </summary>
+        public void SetCurrentUser(Supabase.Gotrue.User user, string token)
+        {
+            Debug.Log($"[AuthService] SetCurrentUser: {user.Email}");
+            CurrentUser = new AppUser(user, token);
+            StartListenForKick(user.Id, token).Forget();
+        }
+
+        /// <summary>
+        /// 清除当前用户
+        /// </summary>
+        public void ClearCurrentUser()
+        {
+            Debug.Log("[AuthService] ClearCurrentUser");
+            CurrentUser = null;
+            if (_userChannel != null)
+            {
+                _userChannel.Unsubscribe();
+                _userChannel = null;
+            }
+        }
+
+        /// <summary>
         /// 登录方法
         /// </summary>
         public async UniTask<AppUser> SignInAsync(string email, string password)
         {
             // 确保 Supabase 客户端已初始化
             var client = supabaseManager.Supabase();
-            
+
             if (client == null)
             {
                 throw new Exception("Supabase client is not initialized.");
@@ -65,7 +89,7 @@ namespace RunFast2.Scripts.Services
             // 确保 Socket 连接已建立 (增加空值检查)
             if (client.Realtime != null)
             {
-                try 
+                try
                 {
                     await client.Realtime.ConnectAsync();
                 }
@@ -74,7 +98,7 @@ namespace RunFast2.Scripts.Services
                     Debug.LogWarning($"Realtime connect failed (non-critical for login): {ex.Message}");
                 }
             }
-            
+
             // 发起登录
             var session = await client.Auth.SignInWithPassword(email, password);
 
@@ -110,14 +134,12 @@ namespace RunFast2.Scripts.Services
                 }
 
                 // 2. 登录成功，构建 AppUser
-                CurrentUser = new AppUser(session.User, session.AccessToken);
-
-                // 3. 开启心跳/监听，检测被顶号
-                await StartListenForKick(userId, newToken);
+                // 注意：SessionListener 也会触发 SetCurrentUser，这里再次设置也没关系
+                SetCurrentUser(session.User, session.AccessToken);
 
                 return CurrentUser;
             }
-            
+
             return null;
         }
 
@@ -127,7 +149,7 @@ namespace RunFast2.Scripts.Services
         public async UniTask<AppUser> SignUpAsync(string email, string password)
         {
             var client = supabaseManager.Supabase();
-            
+
             if (client == null)
             {
                 throw new Exception("Supabase client is not initialized.");
@@ -136,7 +158,7 @@ namespace RunFast2.Scripts.Services
             // 确保 Socket 连接已建立
             if (client.Realtime != null)
             {
-                try 
+                try
                 {
                     await client.Realtime.ConnectAsync();
                 }
@@ -150,8 +172,6 @@ namespace RunFast2.Scripts.Services
 
             if (session != null && session.User != null)
             {
-                CurrentUser = new AppUser(session.User, session.AccessToken);
-                
                 // 注册成功后通常也需要初始化 Profile
                 try
                 {
@@ -169,11 +189,11 @@ namespace RunFast2.Scripts.Services
                     Debug.LogWarning($"初始化 Profile 失败 (可能已存在): {ex.Message}");
                 }
 
-                await StartListenForKick(session.User.Id, session.AccessToken);
+                SetCurrentUser(session.User, session.AccessToken);
 
                 return CurrentUser;
             }
-            
+
             return null;
         }
 
@@ -182,18 +202,13 @@ namespace RunFast2.Scripts.Services
         /// </summary>
         public async UniTask SignOutAsync()
         {
-            if (_userChannel != null)
-            {
-                _userChannel.Unsubscribe();
-                _userChannel = null;
-            }
+            ClearCurrentUser();
 
             var client = supabaseManager.Supabase();
             if (client != null && client.Auth != null)
             {
                 await client.Auth.SignOut();
             }
-            CurrentUser = null;
         }
 
         /// <summary>
@@ -210,7 +225,7 @@ namespace RunFast2.Scripts.Services
             }
 
             // 确保 Socket 连接已建立
-            try 
+            try
             {
                 await client.Realtime.ConnectAsync();
             }
@@ -231,11 +246,11 @@ namespace RunFast2.Scripts.Services
 
             // 使用 Register 方法注册 Postgres 变更监听
             // 根据反编译源码，IRealtimeChannel 没有 On 方法，而是使用 Register 和 AddPostgresChangeHandler
-            
+
             // 方式 1: 使用 Register 注册选项，然后 Subscribe (这是 Supabase C# SDK 的标准流程)
             // 修正：PostgresChangesOptions 构造函数参数
             _userChannel.Register(new PostgresChangesOptions("public", "profiles", PostgresChangesOptions.ListenType.Updates, $"id=eq.{userId}"));
-            
+
             // 方式 2: 添加回调处理
             // 修正：使用 PostgresChangesOptions.ListenType.Updates 而不是 Update
             _userChannel.AddPostgresChangeHandler(PostgresChangesOptions.ListenType.Updates, (sender, change) =>
@@ -247,9 +262,9 @@ namespace RunFast2.Scripts.Services
                     // 注意：Supabase C# SDK 的 Realtime Payload 结构可能因版本而异
                     // 这里假设 Payload.Data 是一个 Dictionary<string, object>
                     // 或者通过 change.Model<UserProfile>() 来获取
-                    
+
                     // 尝试直接反序列化为 UserProfile
-                    try 
+                    try
                     {
                         var newProfile = change.Model<UserProfile>();
                         if (newProfile != null && newProfile.LastLoginToken != currentToken)
@@ -281,11 +296,19 @@ namespace RunFast2.Scripts.Services
                 await SignOutAsync();
 
                 // 2. 弹窗提示
-                DialogManager.Instance.ShowInfo("下线通知", "您的账号已在其他设备登录，请重新登录。", "确定", () =>
+                if (DialogManager.Instance != null)
                 {
-                    // 3. 返回登录场景
+                    DialogManager.Instance.ShowInfo("下线通知", "您的账号已在其他设备登录，请重新登录。", "确定", () =>
+                    {
+                        // 3. 返回登录场景
+                        UnityEngine.SceneManagement.SceneManager.LoadScene(loginScene);
+                    });
+                }
+                else
+                {
+                    Debug.LogWarning("DialogManager not found, just loading login scene.");
                     UnityEngine.SceneManagement.SceneManager.LoadScene(loginScene);
-                });
+                }
             });
         }
 
@@ -297,16 +320,16 @@ namespace RunFast2.Scripts.Services
             if (ex is GotrueException goTrueEx)
             {
                 string msg = goTrueEx.Message.ToLower();
-                
+
                 if (msg.Contains("already registered") || msg.Contains("already exists"))
                     return "注册失败: 该邮箱已被注册";
-                
+
                 if (msg.Contains("invalid login credentials"))
                     return "登录失败: 账号或密码错误";
-                
+
                 if (msg.Contains("password should be at least"))
                     return "密码太短，请设置更复杂的密码";
-                    
+
                 return $"认证错误: {goTrueEx.Message}";
             }
 

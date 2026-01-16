@@ -36,10 +36,10 @@ namespace RunFast2.Scripts.View
             foreach (var playerStats in result.PlayerStats)
             {
                 GameObject go = Instantiate(ItemPrefab, ContentRoot);
-                ResultItemView view = go.GetComponent<ResultItemView>();
+                GameResultItemView view = go.GetComponent<GameResultItemView>();
                 if (view != null)
                 {
-                    view.Initialize(playerStats);
+                    view.SetData(playerStats);
                 }
             }
         }

@@ -651,7 +651,7 @@ public class PokerManager : NetworkBehaviour
     void NextTurn(CardPlayer[] seatedPlayers)
     {
         int playerCount = seatedPlayers.Length;
-        CurrentPlayerIndex = (CurrentPlayerIndex + 1) % playerCount;
+        CurrentPlayerIndex = (CurrentPlayerIndex - 1 + playerCount) % playerCount;
 
         CardPlayer nextPlayer = seatedPlayers[CurrentPlayerIndex];
 

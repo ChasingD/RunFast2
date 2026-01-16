@@ -1,13 +1,10 @@
-﻿using System;
+﻿using System.Collections;
 using System.Collections.Generic;
-using Cysharp.Threading.Tasks;
-using DG.Tweening;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-// 引用 UniTask
-
-// 引入 DOTween
+using Cysharp.Threading.Tasks; // 引用 UniTask
+using DG.Tweening; // 引入 DOTween
 
 namespace RunFast2.Scripts.View
 {
@@ -39,7 +36,7 @@ namespace RunFast2.Scripts.View
         public int SeatID;                 // 0, 1, 2 (在Inspector里手动填好)
 
         // 定义一个委托，当点击入座时通知上层
-        public Action<int> OnSitClicked;
+        public System.Action<int> OnSitClicked;
 
         private void Start()
         {
