@@ -10,49 +10,61 @@ namespace RunFast2.Scripts.View
 {
     public class GameSeatView : MonoBehaviour
     {
-        [Header("UI Components")]
-        public GameObject PlayerInfoGroup; 
-        public TextMeshProUGUI NameText;   
-        public TextMeshProUGUI ScoreText;  
-        // public Image AvatarImage;
+        [Header("UI Components")] public GameObject PlayerInfoGroup;
+        public TextMeshProUGUI NameText;
+        public TextMeshProUGUI ScoreText;
+        public Image AvatarImage; // 恢复 AvatarImage 引用
         public Button AvatarButton; // 用于点击头像使用道具
 
-        [Header("Active Indicator")]
-        public GameObject ActiveIndicator; 
+        [Header("Active Indicator")] public GameObject ActiveIndicator;
         public GameObject Clock;
-        public TextMeshProUGUI TimerText;  
+        public TextMeshProUGUI TimerText;
 
-        [Header("Played Cards Area")]
-        public Transform PlayedCardsContainer; 
-        public GameObject CardViewPrefab;      
-        public GameObject ActionBubble;        
-        public TextMeshProUGUI ActionText;     
-        
-        [Header("Effects")]
-        public TextMeshProUGUI ScoreChangeText; 
+        [Header("Played Cards Area")] public Transform PlayedCardsContainer;
+        public GameObject CardViewPrefab;
+        public GameObject ActionBubble;
+        public TextMeshProUGUI ActionText;
 
-        [Header("Settings")]
-        public int UIIndex; // 0=Bottom, 1=Right, 2=Left
+        [Header("Effects")] public TextMeshProUGUI ScoreChangeText;
+
+        [Header("Settings")] public int UIIndex; // 0=Bottom, 1=Right, 2=Left
+        public Sprite BotAvatarSprite; // 机器人头像
+        public Sprite DefaultAvatarSprite; // 默认头像
 
         public System.Action<int> OnAvatarClicked; // 回传 UIIndex
 
         private void Start()
         {
             if (AvatarButton) AvatarButton.onClick.AddListener(() => OnAvatarClicked?.Invoke(UIIndex));
-            
+
             // 初始隐藏
             gameObject.SetActive(false);
         }
 
-        public void SetState_Occupied(string playerName, bool isSelf, int cardCount, int score)
+        public void SetState_Occupied(string playerName, bool isSelf, int cardCount, int score, bool isBot = false)
         {
             gameObject.SetActive(true);
             if (PlayerInfoGroup) PlayerInfoGroup.SetActive(true);
 
             string countStr = cardCount > 0 ? $" [{cardCount}]" : "";
-            if (NameText) NameText.text = (isSelf ? $"<color=yellow>{playerName}</color>" : playerName) + countStr;
-            
+
+            // 名字颜色处理
+            string displayName = playerName;
+            if (isBot) displayName = $"<color=#00FFFF>[Bot]</color> {playerName}"; // 使用十六进制颜色
+            else if (isSelf) displayName = $"<color=#FFFF00>{playerName}</color>"; // 使用十六进制颜色
+
+            if (NameText) NameText.text = displayName + countStr;
+
             if (ScoreText) ScoreText.text = score.ToString();
+
+            // 头像处理
+            if (AvatarImage)
+            {
+                if (isBot && BotAvatarSprite != null)
+                    AvatarImage.sprite = BotAvatarSprite;
+                else if (DefaultAvatarSprite != null)
+                    AvatarImage.sprite = DefaultAvatarSprite;
+            }
         }
 
         public void SetActiveState(bool isActive)
@@ -74,7 +86,7 @@ namespace RunFast2.Scripts.View
         public void UpdateScore(int newScore, int change)
         {
             if (ScoreText) ScoreText.text = newScore.ToString();
-            
+
             if (change != 0 && ScoreChangeText)
             {
                 ShowScoreChangeEffect(change).Forget();
@@ -87,18 +99,18 @@ namespace RunFast2.Scripts.View
             ScoreChangeText.gameObject.SetActive(true);
             ScoreChangeText.text = change > 0 ? $"+{change}" : change.ToString();
             ScoreChangeText.color = change > 0 ? Color.yellow : Color.red;
-            
+
             var rect = ScoreChangeText.rectTransform;
-            Vector2 startPos = new Vector2(0, 50); 
+            Vector2 startPos = new Vector2(0, 50);
             rect.anchoredPosition = startPos;
             ScoreChangeText.alpha = 1f;
 
             var sequence = DOTween.Sequence();
             sequence.Append(rect.DOAnchorPosY(startPos.y + 50, 1.5f).SetEase(Ease.OutQuad));
             sequence.Join(ScoreChangeText.DOFade(0, 1.5f).SetEase(Ease.InQuad));
-            
+
             await sequence.AsyncWaitForCompletion();
-            
+
             if (ScoreChangeText != null) ScoreChangeText.gameObject.SetActive(false);
         }
 
@@ -117,7 +129,7 @@ namespace RunFast2.Scripts.View
 
         async UniTaskVoid AnimateShowCardsAsync(Card[] cards)
         {
-            Transform animRoot = PlayedCardsContainer.parent; 
+            Transform animRoot = PlayedCardsContainer.parent;
             Vector3 startWorldPos = PlayerInfoGroup != null ? PlayerInfoGroup.transform.position : transform.position;
 
             List<GameObject> placeholders = new List<GameObject>();
@@ -128,7 +140,7 @@ namespace RunFast2.Scripts.View
                 GameObject placeholder = Instantiate(CardViewPrefab, PlayedCardsContainer);
                 var canvasGroup = placeholder.GetComponent<CanvasGroup>();
                 if (canvasGroup == null) canvasGroup = placeholder.AddComponent<CanvasGroup>();
-                canvasGroup.alpha = 0; 
+                canvasGroup.alpha = 0;
                 placeholders.Add(placeholder);
             }
 
@@ -149,7 +161,7 @@ namespace RunFast2.Scripts.View
 
                 GameObject go = Instantiate(CardViewPrefab, animRoot);
                 go.transform.position = startWorldPos;
-                go.transform.localScale = Vector3.zero; 
+                go.transform.localScale = Vector3.zero;
 
                 CardView view = go.GetComponent<CardView>();
                 if (view != null)
@@ -159,14 +171,14 @@ namespace RunFast2.Scripts.View
                     if (btn) Destroy(btn);
                     if (view.CardImage) view.CardImage.raycastTarget = false;
                 }
-                
+
                 realCards.Add(go);
 
                 var seq = DOTween.Sequence();
-                seq.Append(go.transform.DOMove(targetPos, 0.3f).SetEase(Ease.OutBack)); 
-                seq.Join(go.transform.DOScale(Vector3.one * 0.7f, 0.3f)); 
+                seq.Append(go.transform.DOMove(targetPos, 0.3f).SetEase(Ease.OutBack));
+                seq.Join(go.transform.DOScale(Vector3.one * 0.7f, 0.3f));
                 seq.SetDelay(i * 0.05f);
-                
+
                 animTasks.Add(seq.AsyncWaitForCompletion().AsUniTask());
             }
 
@@ -198,7 +210,7 @@ namespace RunFast2.Scripts.View
         public void ClearPlayedCards()
         {
             this.transform.DOKill(true);
-            
+
             if (PlayedCardsContainer != null)
             {
                 foreach (Transform child in PlayedCardsContainer)
@@ -206,7 +218,32 @@ namespace RunFast2.Scripts.View
                     Destroy(child.gameObject);
                 }
             }
+
             if (ActionBubble) ActionBubble.SetActive(false);
+        }
+
+        // --- 新增特效方法 ---
+
+        public void PlayShakeEffect()
+        {
+            // 震动头像或整个面板
+            if (PlayerInfoGroup != null)
+            {
+                PlayerInfoGroup.transform.DOShakePosition(5.0f, strength: 50, vibrato: 50);
+            }
+            else
+            {
+                transform.DOShakePosition(5.0f, strength: 50, vibrato: 50);
+            }
+        }
+
+        public void PlayUpsideDownEffect()
+        {
+            var rect = GetComponent<RectTransform>();
+            if (rect != null)
+            {
+                rect.DORotate(new Vector3(0, 0, 180), 0.5f).OnComplete(() => { DOVirtual.DelayedCall(5.0f, () => { rect.DORotate(Vector3.zero, 0.5f); }); });
+            }
         }
     }
 }

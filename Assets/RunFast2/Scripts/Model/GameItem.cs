@@ -9,8 +9,8 @@ namespace RunFast2.Scripts.Model
         Bucket = 1,   // 水桶 (泼水/模糊)
         Flower = 2,   // 鲜花 (赞美/特效)
         Bomb = 3,     // 炸弹 (震屏/扣分?)
-        // SkipTurn = 4, // 禁手 (功能性)
-        // XRay = 5      // 透视 (功能性)
+        UpsideDown = 4, // 上下颠倒
+        Earthquake = 5  // 地震
     }
 
     [Serializable]

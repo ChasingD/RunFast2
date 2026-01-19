@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
@@ -10,6 +11,7 @@ using TMPro;
 using RunFast2.Scripts.Manager;
 using Cysharp.Threading.Tasks; // 引用 UniTask
 using Ricimi; // 引用 Ricimi
+using System.Threading;
 
 namespace RunFast2.Scripts.View
 {
@@ -32,6 +34,7 @@ namespace RunFast2.Scripts.View
         public GameObject RobPanel;
         public Button RobButton;
         public Button NoRobButton;
+        public Button FirstTurnButton; // 新增：我先出按钮
         public Slider AutoPlaySlider; // 修改：托管开关 (Slider)
 
         [Header("Result UI Prefabs")]
@@ -43,6 +46,7 @@ namespace RunFast2.Scripts.View
         public List<CardView> CurrentCardViews = new List<CardView>();
         private CardPlayer _localPlayer;
         private PopupOpener _popupOpener; // 用于打开弹窗
+        private CancellationTokenSource _dealAnimCTS;
 
         private void Awake()
         {
@@ -65,6 +69,7 @@ namespace RunFast2.Scripts.View
             if (PassButton) PassButton.onClick.AddListener(OnPassClicked);
             if (RobButton) RobButton.onClick.AddListener(() => OnRobClicked(true));
             if (NoRobButton) NoRobButton.onClick.AddListener(() => OnRobClicked(false));
+            if (FirstTurnButton) FirstTurnButton.onClick.AddListener(OnFirstTurnClicked); // 绑定事件
             if (AutoPlaySlider) AutoPlaySlider.onValueChanged.AddListener(OnAutoPlayToggled);
             
             // Subscribe to Static Events
@@ -82,6 +87,13 @@ namespace RunFast2.Scripts.View
 
         private void OnDestroy()
         {
+            if (_dealAnimCTS != null)
+            {
+                _dealAnimCTS.Cancel();
+                _dealAnimCTS.Dispose();
+                _dealAnimCTS = null;
+            }
+
             // Unsubscribe Static Events
             CardPlayer.OnPlayerInfoUpdated -= OnPlayerUpdated;
             CardPlayer.OnShowRobUI -= OnShowRobUI;
@@ -321,6 +333,14 @@ namespace RunFast2.Scripts.View
         {
             if (_localPlayer == null) return;
 
+            // Cancel any ongoing deal animation to prevent duplicate cards
+            if (_dealAnimCTS != null)
+            {
+                _dealAnimCTS.Cancel();
+                _dealAnimCTS.Dispose();
+                _dealAnimCTS = null;
+            }
+
             // Clear old views
             foreach (Transform child in HandContainer)
             {
@@ -335,7 +355,9 @@ namespace RunFast2.Scripts.View
             }
 
             // 直接生成并显示
-            foreach (var card in _localPlayer.MyHand)
+            // 使用构造函数创建副本，避免 InvalidOperationException
+            var handCopy = new List<Card>(_localPlayer.MyHand);
+            foreach (var card in handCopy)
             {
                 GameObject go = Instantiate(CardViewPrefab, HandContainer);
                 CardView view = go.GetComponent<CardView>();
@@ -349,6 +371,15 @@ namespace RunFast2.Scripts.View
 
         async UniTaskVoid AnimateDealCardsAsync()
         {
+            // Cancel previous animation if any
+            if (_dealAnimCTS != null)
+            {
+                _dealAnimCTS.Cancel();
+                _dealAnimCTS.Dispose();
+            }
+            _dealAnimCTS = new CancellationTokenSource();
+            var token = _dealAnimCTS.Token;
+
             // Clear old views
             foreach (Transform child in HandContainer)
             {
@@ -366,19 +397,39 @@ namespace RunFast2.Scripts.View
             if (AudioManager.Instance != null) AudioManager.Instance.PlaySFX(AudioManager.Instance.SFX_Deal);
 
             // 逐个生成并移动
-            foreach (var card in _localPlayer.MyHand)
+            // 使用构造函数创建副本，避免 InvalidOperationException
+            var handCopy = new List<Card>(_localPlayer.MyHand);
+            
+            try
             {
-                GameObject go = Instantiate(CardViewPrefab, HandContainer);
-                CardView view = go.GetComponent<CardView>();
-                if (view != null)
+                foreach (var card in handCopy)
                 {
-                    view.Initialize(card);
-                    CurrentCardViews.Add(view);
-                    
-                    // 简单的动画：先隐藏，再显示
-                    go.SetActive(false);
-                    await UniTask.Delay(50); // 50ms
-                    if (go != null) go.SetActive(true);
+                    if (token.IsCancellationRequested) return;
+
+                    GameObject go = Instantiate(CardViewPrefab, HandContainer);
+                    CardView view = go.GetComponent<CardView>();
+                    if (view != null)
+                    {
+                        view.Initialize(card);
+                        CurrentCardViews.Add(view);
+                        
+                        // 简单的动画：先隐藏，再显示
+                        go.SetActive(false);
+                        await UniTask.Delay(50, cancellationToken: token); // 50ms
+                        if (go != null) go.SetActive(true);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Animation cancelled
+            }
+            finally
+            {
+                if (_dealAnimCTS != null && _dealAnimCTS.Token == token)
+                {
+                    _dealAnimCTS.Dispose();
+                    _dealAnimCTS = null;
                 }
             }
         }
@@ -565,6 +616,21 @@ namespace RunFast2.Scripts.View
         {
             if (_localPlayer == null) return;
             _localPlayer.CmdRobPass(wantToRob);
+            if (RobPanel) RobPanel.SetActive(false);
+            
+            // 播放按钮音效
+            if (AudioManager.Instance != null) AudioManager.Instance.PlaySFX(AudioManager.Instance.SFX_Button);
+        }
+
+        void OnFirstTurnClicked()
+        {
+            if (_localPlayer == null) return;
+            // 模拟抢关，但这里是“我先出”
+            // 实际上“我先出”在逻辑上等同于抢关成功，或者是一个特殊的抢关请求
+            // 这里我们复用 CmdRobPass，但可能需要区分意图，或者直接视为抢关
+            // 如果“我先出”有特殊逻辑（比如必定成功？或者只是另一种UI表现的抢关？），需要修改协议
+            // 假设这里“我先出”就是抢关的意思
+            _localPlayer.CmdFirstTurn(); 
             if (RobPanel) RobPanel.SetActive(false);
             
             // 播放按钮音效

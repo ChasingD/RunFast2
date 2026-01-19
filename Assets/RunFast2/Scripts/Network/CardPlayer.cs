@@ -32,6 +32,10 @@ namespace RunFast2.Scripts.Network
         [SyncVar(hook = nameof(OnAutoPlayChanged))]
         public bool IsAutoPlay = false;
 
+        // 【新增】标记是否为机器人
+        [SyncVar]
+        public bool IsBot = false;
+
         // ================== 2. 游戏数据 (Gameplay Data) ==================
 
         // 客户端本地手牌
@@ -102,6 +106,13 @@ namespace RunFast2.Scripts.Network
         [Command]
         public void CmdSitDown(int seatID, string name)
         {
+            SitDownInternal(seatID, name);
+        }
+
+        // 提取为公共方法，供服务器直接调用（生成机器人时）
+        [Server]
+        public void SitDownInternal(int seatID, string name)
+        {
             // 1. 检查目标座位是否被占用
             foreach (var p in FindObjectsOfType<CardPlayer>())
             {
@@ -112,14 +123,12 @@ namespace RunFast2.Scripts.Network
                 }
             }
 
-            // 2. 如果玩家已经在其他座位上，先离开旧座位（逻辑上不需要额外操作，直接覆盖 SeatIndex 即可）
-            // 但为了清晰，可以打印日志
+            // 2. 如果玩家已经在其他座位上，先离开旧座位
             if (this.SeatIndex != -1)
             {
                 Debug.Log($"玩家 {PlayerName} 从座位 {this.SeatIndex} 换到了 {seatID}");
             }
 
-            // 如果名字为空（未登录），使用 netId 作为名字
             if (string.IsNullOrEmpty(name))
                 this.PlayerName = $"Player {netId}";
             else
@@ -132,7 +141,10 @@ namespace RunFast2.Scripts.Network
             this.IsReady = true; 
             
             // 5. 检查是否所有人都准备好了
-            CheckAllReady();
+            if (PokerManager.Instance != null)
+            {
+                PokerManager.Instance.CheckAllReady(); 
+            }
         }
 
         [Command]
@@ -140,7 +152,11 @@ namespace RunFast2.Scripts.Network
         {
             if (SeatIndex == -1) return;
             this.IsReady = !this.IsReady;
-            CheckAllReady();
+            
+            if (PokerManager.Instance != null)
+            {
+                PokerManager.Instance.CheckAllReady();
+            }
         }
 
         [Command]
@@ -173,6 +189,15 @@ namespace RunFast2.Scripts.Network
             if (PokerManager.Instance != null)
             {
                 PokerManager.Instance.OnPlayerRob(this, wantToRob);
+            }
+        }
+
+        [Command]
+        public void CmdFirstTurn()
+        {
+            if (PokerManager.Instance != null)
+            {
+                PokerManager.Instance.OnPlayerFirstTurn(this);
             }
         }
 
@@ -223,37 +248,18 @@ namespace RunFast2.Scripts.Network
             }
         }
 
-        // ================== 6. 服务器逻辑 (Server Logic) ==================
-
-        [Server]
-        void CheckAllReady()
+        [Command]
+        public void CmdAddBot()
         {
-            var allPlayers = FindObjectsOfType<CardPlayer>();
-            int seatedCount = 0;
-            int readyCount = 0;
-
-            foreach (var p in allPlayers)
+            if (PokerManager.Instance != null)
             {
-                if (p.SeatIndex != -1)
-                {
-                    seatedCount++;
-                    if (p.IsReady) readyCount++;
-                }
-            }
-
-            if (seatedCount == 3 && readyCount == 3)
-            {
-                Debug.Log("所有玩家准备完毕，请求 PokerManager 发牌...");
-                if (PokerManager.Instance != null)
-                {
-                    PokerManager.Instance.InitializeGame((NetworkManager.singleton as RunFastNetworkManager)!.PendingRoomSettings);
-                }
-                else
-                {
-                    Debug.LogError("PokerManager 实例未找到！");
-                }
+                PokerManager.Instance.AddBot();
             }
         }
+
+        // ================== 6. 服务器逻辑 (Server Logic) ==================
+
+        // CheckAllReady 移到 PokerManager 中统一管理
 
         // ================== 7. 服务器 -> 客户端 RPC (TargetRPC & Rpc) ==================
 
@@ -352,7 +358,8 @@ namespace RunFast2.Scripts.Network
             OnRoundFinished?.Invoke(result); // 恢复触发事件，以便 HandViewController 播放音效
 
             // 上传单局数据 (仅本地玩家上传自己的)
-            if (isLocalPlayer)
+            // 【修改】如果是机器人，不上传数据
+            if (isLocalPlayer && !IsBot)
             {
                 UploadMyRoundRecord(result).Forget();
             }
@@ -407,7 +414,7 @@ namespace RunFast2.Scripts.Network
                 IsRobSuccess = myResult.IsRobSuccess,
                 IsReverseSuccess = false, // 暂未实现反关逻辑
                 BombCount = 0, // 暂未在 PlayerRoundResult 中统计炸弹数，如果需要，需扩展 PlayerRoundResult
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = null // 显式设置为 null，让数据库使用默认值
             };
 
             Debug.Log("[Upload] Calling SupabaseManager.UploadGameRecord...");

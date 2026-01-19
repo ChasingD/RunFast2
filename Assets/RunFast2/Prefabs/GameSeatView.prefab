@@ -703,6 +703,7 @@ MonoBehaviour:
   PlayerInfoGroup: {fileID: 0}
   NameText: {fileID: 4384754021265432300}
   ScoreText: {fileID: 3813713100158176305}
+  AvatarImage: {fileID: 798898502421813017}
   AvatarButton: {fileID: 5511097373023820458}
   ActiveIndicator: {fileID: 662770926603940789}
   Clock: {fileID: 2425623638503177041}
@@ -713,6 +714,8 @@ MonoBehaviour:
   ActionText: {fileID: 5089322092609840409}
   ScoreChangeText: {fileID: 3910834107456283713}
   UIIndex: 0
+  BotAvatarSprite: {fileID: 21300000, guid: cf21c39427c6347bab63ccc24450ae49, type: 3}
+  DefaultAvatarSprite: {fileID: 21300000, guid: 6c556649b9e2743ba85b28d56d165aa2, type: 3}
 --- !u!1 &5926046468002440540
 GameObject:
   m_ObjectHideFlags: 0
@@ -1161,6 +1164,17 @@ RectTransform:
   m_CorrespondingSourceObject: {fileID: 4432667871166410642, guid: f6ad9711f359b4e3f91234923303de14, type: 3}
   m_PrefabInstance: {fileID: 4089602748088288471}
   m_PrefabAsset: {fileID: 0}
+--- !u!114 &798898502421813017 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 3735579745894667214, guid: f6ad9711f359b4e3f91234923303de14, type: 3}
+  m_PrefabInstance: {fileID: 4089602748088288471}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1001 &7179138508065924555
 PrefabInstance:
   m_ObjectHideFlags: 0

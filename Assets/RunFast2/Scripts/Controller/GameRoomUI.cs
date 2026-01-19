@@ -6,6 +6,7 @@ using UnityEngine.UI;
 using RunFast2.Scripts.Model;
 using System.Linq;
 using System.Collections.Generic;
+using DG.Tweening; // 引入 DOTween
 
 namespace RunFast2.Scripts.Controller
 {
@@ -18,14 +19,19 @@ namespace RunFast2.Scripts.Controller
         [Header("UI Controls")]
         public Button ReadyButton;   // 屏幕下方的准备按钮
         // public Button StartGameButton; // (可选) 只有房主可见的开始按钮
+        
+        [Header("Debug")]
+        public Button AddBotButton; // 在 Inspector 中绑定一个按钮
 
         [Header("Item System")]
         public GameObject ItemMenuPrefab; // 道具菜单预制体
+        public GameObject TomatoPrefab; // 番茄特效预制体
         private GameObject _activeItemMenu;
 
         private int _myCurrentSeat = -1; // 记录本地玩家坐在哪
         private PlayerTotalStats[] _lastStats; // 缓存上一次的分数
 
+        public RectTransform panel;
         void OnEnable()
         {
             // 订阅 CardPlayer 的静态事件
@@ -56,6 +62,7 @@ namespace RunFast2.Scripts.Controller
             }
         
             if (ReadyButton) ReadyButton.onClick.AddListener(OnReadyClicked);
+            if (AddBotButton) AddBotButton.onClick.AddListener(OnAddBotClicked);
             
             // 初始状态刷新
             RefreshAllSeats();
@@ -87,7 +94,8 @@ namespace RunFast2.Scripts.Controller
             if (PokerManager.Instance == null) return;
 
             bool isGameStarted = PokerManager.Instance.CurrentState == GameState.Playing || 
-                                 PokerManager.Instance.CurrentState == GameState.Robbing;
+                                 PokerManager.Instance.CurrentState == GameState.Robbing ||
+                                 PokerManager.Instance.CurrentState == GameState.RoundFinished; // 增加 RoundFinished 状态
 
             // 1. 控制两组座位的显隐
             foreach (var seat in LobbySeats) seat.gameObject.SetActive(!isGameStarted);
@@ -95,8 +103,17 @@ namespace RunFast2.Scripts.Controller
 
             // 2. 更新 ReadyButton 状态 (只在准备阶段显示)
             if (ReadyButton) ReadyButton.gameObject.SetActive(!isGameStarted && _myCurrentSeat != -1);
+            
+            // 3. 更新 AddBotButton 状态 (只在准备阶段且是房主显示)
+            if (AddBotButton)
+            {
+                var localPlayer = NetworkClient.localPlayer?.GetComponent<CardPlayer>();
+                // 只有房主(isServer)且在准备阶段显示
+                bool isHost = localPlayer != null && localPlayer.isServer;
+                AddBotButton.gameObject.SetActive(!isGameStarted && isHost);
+            }
 
-            // 3. 填充数据
+            // 4. 填充数据
             var allPlayers = FindObjectsOfType<CardPlayer>();
 
             if (!isGameStarted)
@@ -108,7 +125,8 @@ namespace RunFast2.Scripts.Controller
                 {
                     if (p.SeatIndex >= 0 && p.SeatIndex < LobbySeats.Length)
                     {
-                        LobbySeats[p.SeatIndex].SetState_Occupied(p.PlayerName, p.IsReady, p.isLocalPlayer);
+                        // 传递 IsBot 参数
+                        LobbySeats[p.SeatIndex].SetState_Occupied(p.PlayerName, p.IsReady, p.isLocalPlayer, p.IsBot);
                     }
                 }
                 
@@ -136,7 +154,8 @@ namespace RunFast2.Scripts.Controller
                                 if (!stats.Equals(default(PlayerTotalStats))) score = stats.TotalScore;
                             }
                             
-                            GameSeats[uiIndex].SetState_Occupied(p.PlayerName, p.isLocalPlayer, p.RemainingCardCount, score);
+                            // 传递 IsBot 参数
+                            GameSeats[uiIndex].SetState_Occupied(p.PlayerName, p.isLocalPlayer, p.RemainingCardCount, score, p.IsBot);
                         }
                     }
                 }
@@ -177,6 +196,12 @@ namespace RunFast2.Scripts.Controller
 
         void OnGameAvatarClicked(int uiIndex)
         {
+            // 1. 检查游戏状态：只有在 Playing 状态下才能使用道具
+            if (PokerManager.Instance == null || PokerManager.Instance.CurrentState != GameState.Playing)
+            {
+                return;
+            }
+
             // 点击游戏中的头像，弹出道具菜单
             int targetServerSeat = GetServerSeatIndex(uiIndex);
             var localPlayer = NetworkClient.localPlayer?.GetComponent<CardPlayer>();
@@ -194,6 +219,24 @@ namespace RunFast2.Scripts.Controller
             if (localPlayer != null)
             {
                 localPlayer.CmdToggleReady();
+            }
+        }
+        
+        void OnAddBotClicked()
+        {
+            var localPlayer = NetworkClient.localPlayer?.GetComponent<CardPlayer>();
+            if (localPlayer != null)
+            {
+                // 如果是 Host (isServer=true)，直接调用 PokerManager
+                // 如果是 Client，调用 CmdAddBot
+                if (localPlayer.isServer)
+                {
+                    PokerManager.Instance.AddBot();
+                }
+                else
+                {
+                    localPlayer.CmdAddBot();
+                }
             }
         }
 
@@ -228,8 +271,10 @@ namespace RunFast2.Scripts.Controller
         void HandlePlayerPlayed(int seatIndex, Card[] cards)
         {
             // 只有游戏阶段才显示出牌
+            // 修改：增加 RoundFinished 状态，以便显示最后一手牌
             if (PokerManager.Instance.CurrentState != GameState.Playing && 
-                PokerManager.Instance.CurrentState != GameState.Robbing) return;
+                PokerManager.Instance.CurrentState != GameState.Robbing &&
+                PokerManager.Instance.CurrentState != GameState.RoundFinished) return;
 
             int uiIndex = GetUIIndex(seatIndex);
             if (uiIndex >= 0 && uiIndex < GameSeats.Length)
@@ -287,7 +332,107 @@ namespace RunFast2.Scripts.Controller
 
         void HandleItemEffect(int sourceSeat, int targetSeat, int itemTypeId)
         {
-            // 播放特效逻辑
+            ItemType type = (ItemType)itemTypeId;
+            int sourceUIIndex = GetUIIndex(sourceSeat);
+            int targetUIIndex = GetUIIndex(targetSeat);
+
+            var localPlayer = NetworkClient.localPlayer?.GetComponent<CardPlayer>();
+            bool isMeTarget = (localPlayer != null && localPlayer.SeatIndex == targetSeat);
+            bool isMeSource = (localPlayer != null && localPlayer.SeatIndex == sourceSeat);
+
+            // 1. 基础抛射物逻辑 (番茄、花、水桶、炸弹)
+            if (type == ItemType.Tomato || type == ItemType.Flower || type == ItemType.Bucket || type == ItemType.Bomb)
+            {
+                // 确保有起点和终点
+                if (sourceUIIndex >= 0 && sourceUIIndex < GameSeats.Length &&
+                    targetUIIndex >= 0 && targetUIIndex < GameSeats.Length)
+                {
+                    Vector3 startPos = GameSeats[sourceUIIndex].transform.position;
+                    Vector3 endPos = GameSeats[targetUIIndex].transform.position;
+
+                    // 实例化特效 (这里以番茄为例，其他类似)
+                    GameObject prefab = null;
+                    if (type == ItemType.Tomato) prefab = TomatoPrefab;
+                    // else if (type == ItemType.Flower) prefab = FlowerPrefab;
+                    // ...
+
+                    if (prefab != null)
+                    {
+                        GameObject effect = Instantiate(prefab, transform); // 生成在 Canvas 下
+                        effect.transform.position = startPos;
+                        
+                        // 使用 DOTween 移动
+                        effect.transform.DOMove(endPos, 0.5f).OnComplete(() =>
+                        {
+                            Destroy(effect);
+                            // 可以在这里播放命中音效或生成命中特效
+                        });
+                    }
+                }
+            }
+            // 2. 全局/屏幕特效逻辑 (上下颠倒、地震)
+            else if (type == ItemType.UpsideDown)
+            {
+                if (isMeTarget)
+                {
+                    // 我被攻击了：屏幕颠倒
+                    TriggerUpsideDownEffect();
+                }
+                else
+                {
+                    // 旁观者视角：目标玩家头像翻转
+                    if (targetUIIndex >= 0 && targetUIIndex < GameSeats.Length)
+                    {
+                        GameSeats[targetUIIndex].PlayUpsideDownEffect();
+                    }
+                }
+            }
+            else if (type == ItemType.Earthquake)
+            {
+                if (isMeTarget)
+                {
+                    // 我被攻击了：屏幕震动
+                    TriggerEarthquakeEffect();
+                }
+                else
+                {
+                    // 旁观者视角：目标玩家头像震动
+                    if (targetUIIndex >= 0 && targetUIIndex < GameSeats.Length)
+                    {
+                        GameSeats[targetUIIndex].PlayShakeEffect();
+                    }
+                }
+            }
+        }
+
+        void TriggerUpsideDownEffect()
+        {
+            // 获取 Canvas 的 RectTransform (假设 GameRoomUI 挂在 Canvas 下的一个 Panel 上，或者直接操作整个 Canvas)
+            // 这里简单起见，操作 transform (假设是全屏 Panel)
+            // 或者操作 Camera.main
+            
+            // 方案A: 翻转 UI Root
+            if (panel != null)
+            {
+                // 记录原始旋转
+                Vector3 originalRot = panel.eulerAngles;
+                
+                // 翻转 180 度
+                panel.DORotate(new Vector3(0, 0, 180), 0.5f).OnComplete(() =>
+                {
+                    // 持续一段时间后恢复
+                    DOVirtual.DelayedCall(5.0f, () =>
+                    {
+                        panel.DORotate(new Vector3(0, 0, 0), 0.5f);
+                    });
+                });
+            }
+        }
+
+        void TriggerEarthquakeEffect()
+        {
+            // 震动整个 UI 或 Camera
+            panel.DOShakePosition(5.0f, strength: 100, vibrato: 80);
         }
 
         void HandlePlayerLeft(CardPlayer player)
@@ -331,14 +476,8 @@ namespace RunFast2.Scripts.Controller
             var menu = _activeItemMenu.GetComponent<ItemMenu>();
             if (menu != null)
             {
-                menu.Initialize(targetServerSeat, OnItemClicked);
+                menu.Initialize(targetServerSeat);
             }
-        }
-
-        void OnItemClicked(int targetSeat, ItemType type)
-        {
-            var localPlayer = NetworkClient.localPlayer?.GetComponent<CardPlayer>();
-            if (localPlayer) localPlayer.CmdUseItem(targetSeat, (int)type);
         }
     }
 }

@@ -6,6 +6,7 @@ using UnityEngine;
 using Client = Supabase.Client;
 using Cysharp.Threading.Tasks;
 using RunFast2.Scripts.Model;
+using System.Collections.Generic;
 
 namespace RunFast2.Scripts
 {
@@ -120,14 +121,30 @@ namespace RunFast2.Scripts
                 Debug.LogError("[SupabaseManager] Client is null, cannot upload record.");
                 return;
             }
+
             try
             {
-                await _client.From<GameRecord>().Insert(record);
-                Debug.Log("Game record uploaded successfully.");
+                // 使用 RPC (Remote Procedure Call) 替代直接 Insert
+                // 这样可以绕过 Table RLS 的复杂性，改用 Function 内部的 Security Definer
+                
+                var parameters = new Dictionary<string, object>
+                {
+                    { "p_user_id", record.UserId },
+                    { "p_score_change", record.ScoreChange },
+                    { "p_is_winner", record.IsWinner },
+                    { "p_is_robber", record.IsRobber },
+                    { "p_is_rob_success", record.IsRobSuccess },
+                    { "p_is_reverse_success", record.IsReverseSuccess },
+                    { "p_bomb_count", record.BombCount }
+                };
+
+                await _client.Rpc("insert_game_record", parameters);
+                Debug.Log("Game record uploaded successfully via RPC.");
             }
             catch (Exception ex)
             {
                 Debug.LogError($"Failed to upload game record: {ex.Message}");
+                Debug.LogError($"Full Exception: {ex.ToString()}");
             }
         }
     }

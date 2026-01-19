@@ -7,7 +7,7 @@ namespace RunFast2.Scripts.Model
     [Table("game_records")]
     public class GameRecord : BaseModel
     {
-        [PrimaryKey("id")]
+        [PrimaryKey("id", false)] // false = Do not insert this column (let DB generate it)
         public string Id { get; set; }
 
         [Column("user_id")]
@@ -32,6 +32,6 @@ namespace RunFast2.Scripts.Model
         public int BombCount { get; set; }
         
         [Column("created_at")]
-        public DateTime CreatedAt { get; set; }
+        public DateTime? CreatedAt { get; set; }
     }
 }

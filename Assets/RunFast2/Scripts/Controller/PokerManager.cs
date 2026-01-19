@@ -57,6 +57,9 @@ public class PokerManager : NetworkBehaviour
     public static event System.Action<GameState> OnStateChangedEvent;
     public static event System.Action<RoundResult> OnRoundResultEvent; // 客户端收到单局结算
     public static event System.Action<GameTotalResult> OnGameResultEvent; // 客户端收到总结算
+    
+    [Header("Bot Settings")]
+    public GameObject CardPlayerPrefab; // 确保在 Inspector 中赋值 CardPlayer 的预制体
 
     private void Awake()
     {
@@ -190,24 +193,52 @@ public class PokerManager : NetworkBehaviour
         // 只有轮到该玩家时才处理
         if (seatedPlayers[CurrentPlayerIndex] != player) return;
 
-        // 启动协程延迟执行
-        StartCoroutine(AutoPlayCoroutine(player));
+        // 如果是机器人 OR 玩家开启了托管，都执行自动出牌
+        if (player.IsBot || player.IsAutoPlay)
+        {
+            StartCoroutine(AutoPlayCoroutine(player));
+        }
     }
 
     [Server]
     IEnumerator AutoPlayCoroutine(CardPlayer player)
     {
-        yield return new WaitForSeconds(1.0f); // 延迟1秒
+        // 机器人思考时间：1~2秒随机，显得更真实
+        float delay = UnityEngine.Random.Range(1.0f, 2.0f);
+        yield return new WaitForSeconds(delay);
 
         // 再次检查状态，防止状态已变
         if (CurrentState != GameState.Playing) yield break;
         var seatedPlayers = GetSeatedPlayers();
         if (CurrentPlayerIndex >= seatedPlayers.Length) yield break;
         if (seatedPlayers[CurrentPlayerIndex] != player) yield break;
-        if (!player.IsAutoPlay) yield break; // 如果玩家取消了托管
+        
+        // 再次确认标记 (防止玩家中途取消托管，但机器人 IsBot 永远为 true)
+        if (!player.IsBot && !player.IsAutoPlay) yield break;
 
-        // 复用超时处理逻辑
-        HandlePlayTimeout();
+        // === AI 核心逻辑 ===
+        List<Card> cardsToPlay = null;
+
+        // 判断是首发还是跟牌
+        PokerHand handToBeat = null;
+        if (LastHand != null && LastPlayerSeatIndex != player.SeatIndex)
+        {
+            handToBeat = LastHand;
+        }
+
+        // 调用 AI 获取出牌
+        cardsToPlay = PokerAI.GetBestMove(player.ServerHand, handToBeat);
+
+        if (cardsToPlay != null && cardsToPlay.Count > 0)
+        {
+            Debug.Log($"[AI] Player {player.SeatIndex} plays: {cardsToPlay.Count} cards");
+            OnPlayerPlayCard(player, cardsToPlay.ToArray());
+        }
+        else
+        {
+            Debug.Log($"[AI] Player {player.SeatIndex} passes");
+            OnPlayerPass(player);
+        }
     }
 
     [Server]
@@ -280,12 +311,30 @@ public class PokerManager : NetworkBehaviour
             {
                 p.RpcShowRobUI();
             }
+            
+            // 遍历所有玩家，如果是机器人，延迟后自动决策
+            foreach (var p in seatedPlayers)
+            {
+                if (p.IsBot)
+                {
+                    StartCoroutine(BotRobCoroutine(p));
+                }
+            }
         }
         else
         {
             CurrentState = GameState.Playing;
             DetermineStartingPlayer(seatedPlayers);
         }
+    }
+    
+    [Server]
+    IEnumerator BotRobCoroutine(CardPlayer bot)
+    {
+        yield return new WaitForSeconds(2.0f);
+        // 简单策略：有炸弹或者大牌多就抢，这里暂时随机或者不抢
+        bool wantRob = false; 
+        OnPlayerRob(bot, wantRob);
     }
 
     [Server]
@@ -312,7 +361,7 @@ public class PokerManager : NetworkBehaviour
             }
             
             // 检查是否需要自动出牌 (如果抢关者开启了托管)
-            if (player.IsAutoPlay)
+            if (player.IsAutoPlay || player.IsBot)
             {
                 CheckAutoPlay(player);
             }
@@ -338,6 +387,35 @@ public class PokerManager : NetworkBehaviour
                 // Just hide UI for this player
                 player.RpcHideRobUI();
             }
+        }
+    }
+
+    [Server]
+    public void OnPlayerFirstTurn(CardPlayer player)
+    {
+        if (CurrentState != GameState.Robbing) return;
+        if (_robResponses.Contains(player.SeatIndex)) return;
+
+        // "我先出" 逻辑：
+        // 视为抢关阶段结束，该玩家获得先手权，但 RobberSeatIndex 保持为 -1 (无抢关者)
+        _robResponses.Add(player.SeatIndex);
+        
+        RobberSeatIndex = -1; 
+        CurrentState = GameState.Playing;
+        CurrentPlayerIndex = player.SeatIndex; // 指定该玩家先出
+        TurnEndTime = NetworkTime.time + TurnDuration;
+
+        var seated = GetSeatedPlayers();
+        foreach (var p in seated)
+        {
+            p.RpcHideRobUI();
+            p.RpcOnRobResult(-1); // 通知大家没人抢关
+        }
+
+        // 检查是否需要自动出牌
+        if (player.IsAutoPlay || player.IsBot)
+        {
+            CheckAutoPlay(player);
         }
     }
 
@@ -403,7 +481,19 @@ public class PokerManager : NetworkBehaviour
             player.ServerHand.Clear();
             player.ServerHand.AddRange(hands[i]);
             player.RemainingCardCount = hands[i].Count; // 初始化牌数
-            player.TargetRpcReceiveHand(player.connectionToClient, hands[i].ToArray());
+            
+            // 如果是机器人，不需要发送 TargetRpc (因为没有客户端连接)
+            // 但为了代码统一，调用也没关系，Mirror 会处理
+            if (!player.IsBot)
+            {
+                player.TargetRpcReceiveHand(player.connectionToClient, hands[i].ToArray());
+            }
+            else
+            {
+                // 机器人直接设置 MyHand (虽然服务器端 MyHand 没用，但保持一致性)
+                player.MyHand.Clear();
+                player.MyHand.AddRange(hands[i]);
+            }
         }
     }
 
@@ -454,7 +544,7 @@ public class PokerManager : NetworkBehaviour
         TurnEndTime = NetworkTime.time + TurnDuration; // Set Timer
         
         // 检查起始玩家是否托管
-        if (players[startingIndex].IsAutoPlay)
+        if (players[startingIndex].IsAutoPlay || players[startingIndex].IsBot)
         {
             CheckAutoPlay(players[startingIndex]);
         }
@@ -528,6 +618,9 @@ public class PokerManager : NetworkBehaviour
             // 扣除其他两家分数，加给当前玩家
             // 更新 GameResult.PlayerStats
             UpdateBombScore(player.SeatIndex, bombScore, seatedPlayers);
+
+            // --- 新增：炸弹触发地震特效 (延迟1秒) ---
+            StartCoroutine(TriggerBombEarthquake(player, seatedPlayers));
         }
 
         // --- Rob Pass Failure Check ---
@@ -552,6 +645,24 @@ public class PokerManager : NetworkBehaviour
         }
 
         NextTurn(seatedPlayers);
+    }
+
+    [Server]
+    IEnumerator TriggerBombEarthquake(CardPlayer sourcePlayer, CardPlayer[] seatedPlayers)
+    {
+        yield return new WaitForSeconds(1.0f);
+        
+        // 再次检查状态，防止游戏已结束
+        if (CurrentState != GameState.Playing && CurrentState != GameState.RoundFinished) yield break;
+
+        foreach (var p in seatedPlayers)
+        {
+            if (p.SeatIndex != sourcePlayer.SeatIndex)
+            {
+                // 模拟使用道具：源头是出牌者，目标是其他玩家，道具类型是地震
+                sourcePlayer.RpcOnItemUsed(sourcePlayer.SeatIndex, p.SeatIndex, (int)ItemType.Earthquake);
+            }
+        }
     }
 
     [Server]
@@ -651,7 +762,8 @@ public class PokerManager : NetworkBehaviour
     void NextTurn(CardPlayer[] seatedPlayers)
     {
         int playerCount = seatedPlayers.Length;
-        CurrentPlayerIndex = (CurrentPlayerIndex - 1 + playerCount) % playerCount;
+        // 修改为逆时针：(CurrentPlayerIndex + 1) % playerCount
+        CurrentPlayerIndex = (CurrentPlayerIndex + 1) % playerCount;
 
         CardPlayer nextPlayer = seatedPlayers[CurrentPlayerIndex];
 
@@ -665,7 +777,7 @@ public class PokerManager : NetworkBehaviour
         Debug.Log($"Next Turn: Player {nextPlayer.SeatIndex}");
         
         // 检查下一位玩家是否托管
-        if (nextPlayer.IsAutoPlay)
+        if (nextPlayer.IsAutoPlay || nextPlayer.IsBot)
         {
             CheckAutoPlay(nextPlayer);
         }
@@ -847,5 +959,80 @@ public class PokerManager : NetworkBehaviour
             tempHand.Remove(found);
         }
         return true;
+    }
+    
+    // 【新增】添加机器人方法
+    [Server]
+    public void AddBot()
+    {
+        // 1. 找到一个空座位
+        var allPlayers = FindObjectsOfType<CardPlayer>();
+        List<int> takenSeats = new List<int>();
+        foreach(var p in allPlayers) 
+        {
+            if(p.SeatIndex != -1) takenSeats.Add(p.SeatIndex);
+        }
+
+        int targetSeat = -1;
+        for (int i = 0; i < 3; i++)
+        {
+            if (!takenSeats.Contains(i))
+            {
+                targetSeat = i;
+                break;
+            }
+        }
+
+        if (targetSeat == -1)
+        {
+            Debug.Log("没有空座位了");
+            return;
+        }
+
+        // 2. 生成机器人对象
+        if (CardPlayerPrefab == null)
+        {
+            Debug.LogError("CardPlayerPrefab is not assigned in PokerManager!");
+            return;
+        }
+        
+        GameObject botObj = Instantiate(CardPlayerPrefab);
+        CardPlayer botPlayer = botObj.GetComponent<CardPlayer>();
+        
+        // 3. 标记为机器人
+        botPlayer.IsBot = true;
+        
+        // 4. 在服务器上生成 (Spawn)
+        NetworkServer.Spawn(botObj);
+
+        // 5. 让机器人坐下
+        botPlayer.SitDownInternal(targetSeat, $"电脑 {targetSeat + 1}");
+        
+        // 6. 检查是否可以开始游戏
+        CheckAllReady();
+    }
+    
+    // 【修改】公开 CheckAllReady 以便 AddBot 调用
+    [Server]
+    public void CheckAllReady()
+    {
+        var allPlayers = FindObjectsOfType<CardPlayer>();
+        int seatedCount = 0;
+        int readyCount = 0;
+
+        foreach (var p in allPlayers)
+        {
+            if (p.SeatIndex != -1)
+            {
+                seatedCount++;
+                if (p.IsReady) readyCount++;
+            }
+        }
+
+        if (seatedCount == 3 && readyCount == 3)
+        {
+            Debug.Log("所有玩家准备完毕，开始发牌...");
+            InitializeGame((NetworkManager.singleton as RunFastNetworkManager)!.PendingRoomSettings);
+        }
     }
 }
